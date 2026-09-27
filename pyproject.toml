@@ -1,0 +1,33 @@
+[project]
+name = "lequ"
+version = "0.1.0"
+description = "Discord Bot for managing quotes"
+readme = "README.md"
+authors = [
+    { name = "Markbeep", email = "mrkswrn@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "alembic>=1.20.0",
+    "discord-py>=2.7.1",
+    "pydantic-settings>=2.15.0",
+    "sqlmodel>=0.0.47",
+]
+
+[project.scripts]
+bot = "lequ:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.40.1",
+]
+
+[tool.basedpyright]
+typeCheckingMode = "all"
+reportDeprecated = false
+reportUninitializedInstanceVariable = false
+reportUnusedCallResult = false
