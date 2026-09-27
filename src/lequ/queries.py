@@ -1,0 +1,351 @@
+import difflib
+
+from sqlalchemy import delete, func
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import col, select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from .constants import DEFAULT_PREFIX
+from .db import get_session
+from .models import (
+    FavoriteQuote,
+    GuildEmoji,
+    GuildSettings,
+    Quote,
+    QuotedMessage,
+    Report,
+    User,
+)
+
+
+class AlreadyQuoted(Exception):
+    """The source message of a quote has already been quoted."""
+
+
+class DuplicateReport(Exception):
+    """The quote already has an outstanding report."""
+
+
+_prefix_cache: dict[int, str] = {}
+_emoji_cache: dict[int, list[str]] = {}
+
+
+def row_pk(row: User | Quote) -> int:
+    """Primary key of a persisted row, narrowed to a plain int."""
+    if row.id is None:
+        raise ValueError("Row has no primary key")
+    return row.id
+
+
+async def get_or_create_discord_user(session: AsyncSession, discord_id: int) -> User:
+    result = await session.exec(select(User).where(col(User.discord_id) == discord_id))
+    user = result.first()
+    if user is not None:
+        return user
+    user = User(user_type="discord", discord_id=discord_id)
+    session.add(user)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        result = await session.exec(
+            select(User).where(col(User.discord_id) == discord_id)
+        )
+        return result.one()
+    return user
+
+
+async def get_or_create_named_user(session: AsyncSession, name: str) -> User:
+    result = await session.exec(select(User).where(col(User.name) == name))
+    user = result.first()
+    if user is not None:
+        return user
+    user = User(user_type="named", name=name)
+    session.add(user)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        result = await session.exec(select(User).where(col(User.name) == name))
+        return result.one()
+    return user
+
+
+async def get_user(session: AsyncSession, user_id: int) -> User | None:
+    return await session.get(User, user_id)
+
+
+async def add_quote(
+    session: AsyncSession,
+    *,
+    text: str,
+    author_id: int,
+    added_by_id: int,
+    guild_id: int,
+    channel_id: int | None = None,
+    message_id: int | None = None,
+) -> Quote:
+    existing = await session.exec(
+        select(Quote).where(
+            col(Quote.guild_id) == guild_id,
+            col(Quote.author) == author_id,
+            col(Quote.text) == text,
+        )
+    )
+    if existing.first() is not None:
+        raise AlreadyQuoted from None
+    quote = Quote(text=text, author=author_id, added_by=added_by_id, guild_id=guild_id)
+    session.add(quote)
+    await session.flush()  # populates quote.id
+    if message_id is not None:
+        if channel_id is None:
+            raise ValueError("channel_id is required when message_id is given")
+        session.add(
+            QuotedMessage(
+                quote_id=row_pk(quote),
+                guild_id=guild_id,
+                channel_id=channel_id,
+                message_id=message_id,
+            )
+        )
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            raise AlreadyQuoted from None
+    await session.commit()
+    return quote
+
+
+async def get_quote(
+    session: AsyncSession, quote_id: int, guild_id: int
+) -> Quote | None:
+    result = await session.exec(
+        select(Quote).where(
+            col(Quote.id) == quote_id,
+            col(Quote.guild_id) == guild_id,
+        )
+    )
+    return result.first()
+
+
+async def get_quotes_by_author(
+    session: AsyncSession, author_id: int, guild_id: int
+) -> list[Quote]:
+    result = await session.exec(
+        select(Quote)
+        .where(col(Quote.author) == author_id, col(Quote.guild_id) == guild_id)
+        .order_by(col(Quote.id))
+    )
+    return list(result.all())
+
+
+async def get_random_quote(session: AsyncSession, guild_id: int) -> Quote | None:
+    statement = select(Quote).where(col(Quote.guild_id) == guild_id)
+    result = await session.exec(statement.order_by(func.random()).limit(1))
+    return result.first()
+
+
+async def search_quotes(
+    session: AsyncSession, guild_id: int, query: str, limit: int = 25
+) -> list[Quote]:
+    # Ranks over every quote of the guild on each call (autocomplete fires per keystroke).
+    # Fine at this scale; swap for a LIKE prefilter or an FTS index if a guild grows huge.
+    needle = query.strip().lower()
+    if not needle:
+        return []
+    result = await session.exec(select(Quote).where(col(Quote.guild_id) == guild_id))
+    scored: list[tuple[float, int, Quote]] = []
+    for quote in result.all():
+        haystack = quote.text.lower()
+        index = haystack.find(needle)
+        if index != -1:
+            score = 1000.0 - index
+        else:
+            ratio = difflib.SequenceMatcher(None, needle, haystack).ratio()
+            # 0.5 keeps near-miss wordings ("never going" vs "never gonna give you up" = 0.53)
+            # while unrelated text stays far below it.
+            if ratio < 0.5:
+                continue
+            score = ratio * 100
+        scored.append((score, quote.id or 0, quote))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [quote for _, _, quote in scored[:limit]]
+
+
+async def delete_quote(session: AsyncSession, quote_id: int, guild_id: int) -> bool:
+    result = await session.exec(
+        delete(Quote).where(col(Quote.id) == quote_id, col(Quote.guild_id) == guild_id)
+    )
+    await session.commit()
+    return result.rowcount > 0
+
+
+async def create_report(
+    session: AsyncSession, quote_id: int, reporter_id: int, reason: str | None
+) -> Report:
+    existing = await get_report(session, quote_id)
+    if existing is not None:
+        raise DuplicateReport
+    report = Report(quote_id=quote_id, reporter=reporter_id, reason=reason)
+    session.add(report)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise DuplicateReport from None
+    return report
+
+
+async def get_report(session: AsyncSession, quote_id: int) -> Report | None:
+    result = await session.exec(select(Report).where(col(Report.quote_id) == quote_id))
+    return result.first()
+
+
+async def get_reports(
+    session: AsyncSession, guild_id: int
+) -> list[tuple[Report, Quote, User]]:
+    result = await session.exec(
+        select(Report, Quote, User)
+        .join(Quote, col(Report.quote_id) == col(Quote.id))
+        .join(User, col(Report.reporter) == col(User.id))
+        .where(col(Quote.guild_id) == guild_id)
+        .order_by(col(Report.id))
+    )
+    return [(row[0], row[1], row[2]) for row in result.all()]
+
+
+async def delete_report(session: AsyncSession, quote_id: int) -> bool:
+    result = await session.exec(delete(Report).where(col(Report.quote_id) == quote_id))
+    await session.commit()
+    return result.rowcount > 0
+
+
+async def is_favorite(session: AsyncSession, user_id: int, quote_id: int) -> bool:
+    result = await session.exec(
+        select(FavoriteQuote).where(
+            col(FavoriteQuote.user_id) == user_id,
+            col(FavoriteQuote.quote_id) == quote_id,
+        )
+    )
+    return result.first() is not None
+
+
+async def add_favorite(session: AsyncSession, user_id: int, quote_id: int) -> bool:
+    if await is_favorite(session, user_id, quote_id):
+        return False
+    session.add(FavoriteQuote(user_id=user_id, quote_id=quote_id))
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        return False
+    return True
+
+
+async def remove_favorite(session: AsyncSession, user_id: int, quote_id: int) -> bool:
+    result = await session.exec(
+        delete(FavoriteQuote).where(
+            col(FavoriteQuote.user_id) == user_id,
+            col(FavoriteQuote.quote_id) == quote_id,
+        )
+    )
+    await session.commit()
+    return result.rowcount > 0
+
+
+async def toggle_favorite(session: AsyncSession, user_id: int, quote_id: int) -> bool:
+    """Toggle a favorite and return the new state (``True`` = favorited)."""
+    if await is_favorite(session, user_id, quote_id):
+        await remove_favorite(session, user_id, quote_id)
+        return False
+    await add_favorite(session, user_id, quote_id)
+    return True
+
+
+async def get_favorites(
+    session: AsyncSession, user_id: int, guild_id: int
+) -> list[Quote]:
+    result = await session.exec(
+        select(Quote)
+        .join(FavoriteQuote, col(FavoriteQuote.quote_id) == col(Quote.id))
+        .where(col(FavoriteQuote.user_id) == user_id, col(Quote.guild_id) == guild_id)
+        .order_by(col(FavoriteQuote.id))
+    )
+    return list(result.all())
+
+
+async def get_guild_settings(session: AsyncSession, guild_id: int) -> GuildSettings:
+    settings = await session.get(GuildSettings, guild_id)
+    if settings is not None:
+        return settings
+    settings = GuildSettings(guild_id=guild_id)
+    session.add(settings)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        settings = await session.get_one(GuildSettings, guild_id)
+    return settings
+
+
+async def set_prefix(session: AsyncSession, guild_id: int, prefix: str | None) -> str:
+    stored = prefix if prefix else DEFAULT_PREFIX
+    settings = await get_guild_settings(session, guild_id)
+    settings.prefix = stored
+    session.add(settings)
+    await session.commit()
+    _prefix_cache[guild_id] = stored
+    return stored
+
+
+async def get_emojis(session: AsyncSession, guild_id: int) -> list[str]:
+    result = await session.exec(
+        select(GuildEmoji)
+        .where(col(GuildEmoji.guild_id) == guild_id)
+        .order_by(col(GuildEmoji.id))
+    )
+    return [row.emoji for row in result.all()]
+
+
+async def add_emoji(session: AsyncSession, guild_id: int, emoji: str) -> bool:
+    await get_guild_settings(session, guild_id)  # FK target must exist
+    if emoji in await get_emojis(session, guild_id):
+        return False
+    session.add(GuildEmoji(guild_id=guild_id, emoji=emoji))
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        return False
+    _emoji_cache.pop(guild_id, None)
+    return True
+
+
+async def remove_emoji(session: AsyncSession, guild_id: int, emoji: str) -> bool:
+    result = await session.exec(
+        delete(GuildEmoji).where(
+            col(GuildEmoji.guild_id) == guild_id, col(GuildEmoji.emoji) == emoji
+        )
+    )
+    await session.commit()
+    _emoji_cache.pop(guild_id, None)
+    return result.rowcount > 0
+
+
+async def cached_prefix(guild_id: int) -> str:
+    cached = _prefix_cache.get(guild_id)
+    if cached is not None:
+        return cached
+    async with get_session() as session:
+        return (await get_guild_settings(session, guild_id)).prefix
+
+
+async def cached_emojis(guild_id: int) -> list[str]:
+    cached = _emoji_cache.get(guild_id)
+    if cached is not None:
+        return cached
+    async with get_session() as session:
+        emojis = await get_emojis(session, guild_id)
+    _emoji_cache[guild_id] = emojis
+    return emojis

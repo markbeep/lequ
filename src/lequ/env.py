@@ -18,3 +18,4 @@ class Settings(BaseSettings):
     )
 
     db: Database = Database(path="data/quotes.db")
+    discord_token: str | None = None
