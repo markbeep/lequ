@@ -3,6 +3,13 @@
 bot:
     uv run bot
 
+format:
+    uv run ruff format .
+
+check:
+    uv run ruff format --check .
+    uv run basedpyright src
+
 revision message:
     uv run alembic revision --autogenerate -m "{{ message }}"
 

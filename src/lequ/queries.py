@@ -5,12 +5,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from .constants import DEFAULT_PREFIX
+from .constants import DEFAULT_MAX_QUOTE_LENGTH, DEFAULT_PREFIX
 from .db import get_session
 from .models import (
+    Aliases,
+    DiscordUser,
     FavoriteQuote,
     GuildEmoji,
     GuildSettings,
+    NamedUser,
     Quote,
     QuotedMessage,
     Report,
@@ -26,18 +29,21 @@ class DuplicateReport(Exception):
     """The quote already has an outstanding report."""
 
 
+class NotNamedUser(Exception):
+    """Aliases can only be assigned to named users."""
+
+
+class AliasShadowed(Exception):
+    """The alias is already the name of another named user."""
+
+
 _prefix_cache: dict[int, str] = {}
 _emoji_cache: dict[int, list[str]] = {}
 
 
-def row_pk(row: User | Quote) -> int:
-    """Primary key of a persisted row, narrowed to a plain int."""
-    if row.id is None:
-        raise ValueError("Row has no primary key")
-    return row.id
-
-
-async def get_or_create_discord_user(session: AsyncSession, discord_id: int) -> User:
+async def get_or_create_discord_user(
+    session: AsyncSession, discord_id: int
+) -> DiscordUser:
     result = await session.exec(select(User).where(col(User.discord_id) == discord_id))
     user = result.first()
     if user is not None:
@@ -55,7 +61,7 @@ async def get_or_create_discord_user(session: AsyncSession, discord_id: int) -> 
     return user
 
 
-async def get_or_create_named_user(session: AsyncSession, name: str) -> User:
+async def get_or_create_named_user(session: AsyncSession, name: str) -> NamedUser:
     result = await session.exec(select(User).where(col(User.name) == name))
     user = result.first()
     if user is not None:
@@ -73,6 +79,49 @@ async def get_or_create_named_user(session: AsyncSession, name: str) -> User:
 
 async def get_user(session: AsyncSession, user_id: int) -> User | None:
     return await session.get(User, user_id)
+
+
+async def get_discord_user(
+    session: AsyncSession, discord_id: int
+) -> DiscordUser | None:
+    result = await session.exec(select(User).where(col(User.discord_id) == discord_id))
+    return result.first()
+
+
+async def get_named_user(session: AsyncSession, name: str) -> NamedUser | None:
+    result = await session.exec(select(User).where(col(User.name) == name))
+    return result.first()
+
+
+async def get_alias_user(session: AsyncSession, alias: str) -> NamedUser | None:
+    result = await session.exec(
+        select(User)
+        .join(Aliases, col(Aliases.user_id) == col(User.id))
+        .where(col(Aliases.alias) == alias)
+    )
+    return result.first()
+
+
+async def add_alias(session: AsyncSession, name: str, alias: str) -> bool:
+    user = await get_named_user(session, name)
+    if user is None:
+        raise NotNamedUser
+    shadow = await get_named_user(session, alias)
+    if shadow is not None and shadow.id != user.id:
+        raise AliasShadowed
+    session.add(Aliases(user_id=user.id, alias=alias))
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        return False
+    return True
+
+
+async def remove_alias(session: AsyncSession, alias: str) -> bool:
+    result = await session.exec(delete(Aliases).where(col(Aliases.alias) == alias))
+    await session.commit()
+    return result.rowcount > 0
 
 
 async def add_quote(
@@ -102,7 +151,7 @@ async def add_quote(
             raise ValueError("channel_id is required when message_id is given")
         session.add(
             QuotedMessage(
-                quote_id=row_pk(quote),
+                quote_id=quote.id,
                 guild_id=guild_id,
                 channel_id=channel_id,
                 message_id=message_id,
@@ -142,6 +191,16 @@ async def get_quotes_by_author(
 
 async def get_random_quote(session: AsyncSession, guild_id: int) -> Quote | None:
     statement = select(Quote).where(col(Quote.guild_id) == guild_id)
+    result = await session.exec(statement.order_by(func.random()).limit(1))
+    return result.first()
+
+
+async def get_random_quote_by_author(
+    session: AsyncSession, author_id: int, guild_id: int
+) -> Quote | None:
+    statement = select(Quote).where(
+        col(Quote.guild_id) == guild_id, col(Quote.author) == author_id
+    )
     result = await session.exec(statement.order_by(func.random()).limit(1))
     return result.first()
 
@@ -296,6 +355,17 @@ async def set_prefix(session: AsyncSession, guild_id: int, prefix: str | None) -
     session.add(settings)
     await session.commit()
     _prefix_cache[guild_id] = stored
+    return stored
+
+
+async def set_max_quote_length(
+    session: AsyncSession, guild_id: int, value: int | None
+) -> int:
+    stored = value if value is not None else DEFAULT_MAX_QUOTE_LENGTH
+    settings = await get_guild_settings(session, guild_id)
+    settings.max_quote_length = stored
+    session.add(settings)
+    await session.commit()
     return stored
 
 

@@ -1,13 +1,14 @@
-from typing import TYPE_CHECKING, final, override
+import re
+from typing import TYPE_CHECKING, Literal, final, override
 
 import discord
 from discord import app_commands
 from discord.ext import commands
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from .. import queries
-from ..constants import MAX_QUOTE_LENGTH
 from ..db import get_session
-from ..models import Quote, User
+from ..models import DiscordUser, NamedUser, Quote
 from ..ui import (
     FavoriteView,
     Paginator,
@@ -27,6 +28,32 @@ if TYPE_CHECKING:
 
 QUOTES_PER_PAGE = 8
 PREVIEW_LENGTH = 350
+MENTION_ID = re.compile(r"<@!?(\d+)>")
+
+type QuoteMode = Literal["list", "add", "random"]
+
+
+def parse_quote_args(rest: str) -> tuple[QuoteMode, str, str] | None:
+    """Split ``$q`` arguments into ``(mode, target, text)``."""
+    words = rest.split(maxsplit=1)
+    if not words:
+        return None
+    target = words[0]
+    text = words[1] if len(words) > 1 else ""
+    # "all" is reserved and resolved before mentions, ids, names and aliases.
+    if target.lower() == "all":
+        return "list", text.split(maxsplit=1)[0] if text else "", ""
+    if text.lower() == "all":
+        return "list", target, ""
+    if text:
+        return "add", target, text
+    return "random", target, ""
+
+
+def target_id(token: str) -> int | None:
+    """Discord user id of a mention token (``<@123>``), else ``None``."""
+    match = MENTION_ID.fullmatch(token)
+    return int(match.group(1)) if match is not None else None
 
 
 @final
@@ -92,7 +119,7 @@ class QuoteCog(commands.Cog):
         )
         self.bot.tree.add_command(self.add_quote_menu)
 
-    async def _added_by(self, user_id: int) -> User:
+    async def _added_by(self, user_id: int) -> DiscordUser:
         async with get_session() as session:
             return await queries.get_or_create_discord_user(session, user_id)
 
@@ -100,9 +127,10 @@ class QuoteCog(commands.Cog):
         self,
         *,
         guild_id: int,
-        added_by: User,
-        member: discord.abc.User | None,
-        name: str | None,
+        added_by: DiscordUser,
+        member: discord.abc.User | None = None,
+        name: str | None = None,
+        discord_author: DiscordUser | None = None,
         text: str,
         channel_id: int | None = None,
         message_id: int | None = None,
@@ -110,12 +138,23 @@ class QuoteCog(commands.Cog):
         text = text.strip()
         if not text:
             raise CommandError("The quote text is empty.")
-        if len(text) > MAX_QUOTE_LENGTH:
-            raise CommandError(f"Quotes are limited to {MAX_QUOTE_LENGTH} characters.")
         if member is not None and added_by.discord_id == member.id:
             raise CommandError("You can't quote yourself.")
+        if (
+            discord_author is not None
+            and added_by.discord_id == discord_author.discord_id
+        ):
+            raise CommandError("You can't quote yourself.")
         async with get_session() as session:
-            if member is not None:
+            settings = await queries.get_guild_settings(session, guild_id)
+            if len(text) > settings.max_quote_length:
+                raise CommandError(
+                    f"Quotes are limited to {settings.max_quote_length} characters."
+                )
+            if discord_author is not None:
+                author = discord_author
+                display = author.display
+            elif member is not None:
                 author = await queries.get_or_create_discord_user(session, member.id)
                 display = member.display_name
             else:
@@ -127,8 +166,8 @@ class QuoteCog(commands.Cog):
             quote = await queries.add_quote(
                 session,
                 text=text,
-                author_id=queries.row_pk(author),
-                added_by_id=queries.row_pk(added_by),
+                author_id=author.id,
+                added_by_id=added_by.id,
                 guild_id=guild_id,
                 channel_id=channel_id,
                 message_id=message_id,
@@ -136,7 +175,7 @@ class QuoteCog(commands.Cog):
         return quote, display
 
     def _modal_handler(
-        self, guild_id: int, added_by: User, member: discord.Member | None
+        self, guild_id: int, added_by: DiscordUser, member: discord.Member | None
     ) -> QuoteModalHandler:
         async def handler(
             interaction: discord.Interaction, modal_name: str | None, modal_text: str
@@ -161,13 +200,13 @@ class QuoteCog(commands.Cog):
 
         return handler
 
-    def _report_handler(self, added_by: User, quote_id: int) -> ReportModalHandler:
+    def _report_handler(
+        self, added_by: DiscordUser, quote_id: int
+    ) -> ReportModalHandler:
         async def handler(interaction: discord.Interaction, reason: str | None) -> None:
             async with get_session() as session:
                 try:
-                    await queries.create_report(
-                        session, quote_id, queries.row_pk(added_by), reason
-                    )
+                    await queries.create_report(session, quote_id, added_by.id, reason)
                 except queries.DuplicateReport:
                     await interaction.response.send_message(
                         "That quote has already been reported.", ephemeral=True
@@ -205,11 +244,16 @@ class QuoteCog(commands.Cog):
             return
         added_by = await self._added_by(interaction.user.id)
         if text is None or (member is None and name is None):
+            async with get_session() as session:
+                settings = await queries.get_guild_settings(
+                    session, interaction.guild_id
+                )
             modal = QuoteModal(
                 self._modal_handler(interaction.guild_id, added_by, member),
                 name=name,
                 text=text,
                 ask_name=member is None and name is None,
+                max_length=settings.max_quote_length,
             )
             await interaction.response.send_modal(modal)
             return
@@ -259,7 +303,7 @@ class QuoteCog(commands.Cog):
         display = user_display(author) if author is not None else "unknown"
         await interaction.response.send_message(
             embed=quote_embed(quote, display),
-            view=FavoriteView(queries.row_pk(quote)),
+            view=FavoriteView(quote.id),
         )
 
     @app_commands.command(name="quotes", description="List quotes")
@@ -283,7 +327,7 @@ class QuoteCog(commands.Cog):
         async with get_session() as session:
             db_user = await queries.get_or_create_discord_user(session, target.id)
             items = await queries.get_quotes_by_author(
-                session, queries.row_pk(db_user), interaction.guild_id
+                session, db_user.id, interaction.guild_id
             )
         if not items:
             await interaction.response.send_message(
@@ -326,7 +370,7 @@ class QuoteCog(commands.Cog):
             author = await queries.get_user(session, quote.author)
         display = user_display(author) if author is not None else "unknown"
         await interaction.response.send_message(
-            embed=quote_embed(quote, display), view=FavoriteView(queries.row_pk(quote))
+            embed=quote_embed(quote, display), view=FavoriteView(quote.id)
         )
 
     favorites = app_commands.Group(
@@ -346,7 +390,7 @@ class QuoteCog(commands.Cog):
                 session, interaction.user.id
             )
             items = await queries.get_favorites(
-                session, queries.row_pk(db_user), interaction.guild_id
+                session, db_user.id, interaction.guild_id
             )
         if not items:
             await interaction.response.send_message(
@@ -381,9 +425,7 @@ class QuoteCog(commands.Cog):
             db_user = await queries.get_or_create_discord_user(
                 session, interaction.user.id
             )
-            added = await queries.add_favorite(
-                session, queries.row_pk(db_user), quote_id
-            )
+            added = await queries.add_favorite(session, db_user.id, quote_id)
         if added:
             await interaction.response.send_message(
                 f"Added quote {quote_id} to your favorites.", ephemeral=True
@@ -403,9 +445,7 @@ class QuoteCog(commands.Cog):
             db_user = await queries.get_or_create_discord_user(
                 session, interaction.user.id
             )
-            removed = await queries.remove_favorite(
-                session, queries.row_pk(db_user), quote_id
-            )
+            removed = await queries.remove_favorite(session, db_user.id, quote_id)
         if removed:
             await interaction.response.send_message(
                 f"Removed quote {quote_id} from your favorites.", ephemeral=True
@@ -444,6 +484,64 @@ class QuoteCog(commands.Cog):
             ReportModal(self._report_handler(added_by, quote_id))
         )
 
+    aliases = app_commands.Group(
+        name="alias", description="Manage aliases for named users", guild_only=True
+    )
+
+    @aliases.command(name="add", description="Give a named user another name")
+    @app_commands.guild_only()
+    @app_commands.describe(name="Existing named user", alias="New name for that user")
+    async def alias_add(
+        self, interaction: discord.Interaction, name: str, alias: str
+    ) -> None:
+        alias = alias.removeprefix("@")
+        if (
+            not alias
+            or alias.isdigit()
+            or alias.lower() == "all"
+            or any(c.isspace() for c in alias)
+        ):
+            await interaction.response.send_message(
+                "The alias must be one word, not a number or `all`.", ephemeral=True
+            )
+            return
+        async with get_session() as session:
+            try:
+                added = await queries.add_alias(session, name, alias)
+            except queries.NotNamedUser:
+                await interaction.response.send_message(
+                    f"There is no named user called `{name}`.", ephemeral=True
+                )
+                return
+            except queries.AliasShadowed:
+                await interaction.response.send_message(
+                    f"A named user is already called `{alias}`.", ephemeral=True
+                )
+                return
+        if added:
+            await interaction.response.send_message(
+                f"`{alias}` now points to `{name}`.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"`{alias}` is already an alias.", ephemeral=True
+            )
+
+    @aliases.command(name="remove", description="Remove an alias")
+    @app_commands.guild_only()
+    @app_commands.describe(alias="Alias to remove")
+    async def alias_remove(self, interaction: discord.Interaction, alias: str) -> None:
+        async with get_session() as session:
+            removed = await queries.remove_alias(session, alias.removeprefix("@"))
+        if removed:
+            await interaction.response.send_message(
+                f"Removed `{alias.removeprefix('@')}`.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "That alias does not exist.", ephemeral=True
+            )
+
     async def context_add(
         self, interaction: discord.Interaction, message: discord.Message
     ) -> None:
@@ -480,29 +578,161 @@ class QuoteCog(commands.Cog):
             embed=quote_embed(quote, display), ephemeral=True
         )
 
+    async def _random_quote(
+        self, message: discord.Message, guild: discord.Guild
+    ) -> None:
+        async with get_session() as session:
+            quote = await queries.get_random_quote(session, guild.id)
+            if quote is None:
+                await message.reply("There are no quotes on this server yet.")
+                return
+            author = await queries.get_user(session, quote.author)
+        display = user_display(author) if author is not None else "unknown"
+        await message.reply(
+            embed=quote_embed(quote, display),
+            view=FavoriteView(quote.id),
+            mention_author=False,
+        )
+
+    async def _named_target(
+        self, session: AsyncSession, token: str, *, create: bool
+    ) -> NamedUser | None:
+        name = token.removeprefix("@")
+        user = await queries.get_named_user(session, name)
+        if user is None:
+            user = await queries.get_alias_user(session, name)
+        if user is None and create:
+            user = await queries.get_or_create_named_user(session, name)
+        return user
+
+    async def _db_user(
+        self, session: AsyncSession, token: str, *, create: bool
+    ) -> DiscordUser | NamedUser | None:
+        """Mention, discord id, name or alias to a user row."""
+        discord_id = target_id(token)
+        if discord_id is None and token.isdigit():
+            discord_id = int(token)
+        if discord_id is not None:
+            if create:
+                return await queries.get_or_create_discord_user(session, discord_id)
+            return await queries.get_discord_user(session, discord_id)
+        return await self._named_target(session, token, create=create)
+
+    async def _list_user_quotes(
+        self, message: discord.Message, token: str, guild: discord.Guild
+    ) -> None:
+        async with get_session() as session:
+            db_user = await self._db_user(session, token, create=False)
+            if db_user is None:
+                await message.reply(f"{token} doesn't have any quotes.")
+                return
+            items = await queries.get_quotes_by_author(session, db_user.id, guild.id)
+        if not items:
+            await message.reply(f"{user_display(db_user)} doesn't have any quotes.")
+            return
+        pages = _quote_pages(items, f"Quotes from {user_display(db_user)}")
+        view = Paginator(pages, message.author.id)
+        view.message = await message.reply(
+            embed=pages[0], view=view, mention_author=False
+        )
+
+    async def _random_user_quote(
+        self, message: discord.Message, token: str, guild: discord.Guild
+    ) -> None:
+        async with get_session() as session:
+            db_user = await self._db_user(session, token, create=False)
+            if db_user is None:
+                await message.reply(f"{token} doesn't have any quotes.")
+                return
+            quote = await queries.get_random_quote_by_author(
+                session, db_user.id, guild.id
+            )
+        if quote is None:
+            await message.reply(f"{user_display(db_user)} doesn't have any quotes.")
+            return
+        await message.reply(
+            embed=quote_embed(quote, user_display(db_user)),
+            view=FavoriteView(quote.id),
+            mention_author=False,
+        )
+
+    async def _add_to_user(
+        self,
+        message: discord.Message,
+        token: str,
+        text: str,
+        guild: discord.Guild,
+    ) -> None:
+        member: discord.abc.User | None = None
+        name: str | None = None
+        discord_author: DiscordUser | None = None
+        user_id = target_id(token)
+        if user_id is None and token.isdigit():
+            user_id = int(token)
+        if user_id is not None:
+            async with get_session() as session:
+                discord_author = await queries.get_discord_user(session, user_id)
+            if discord_author is None:
+                member = next((m for m in message.mentions if m.id == user_id), None)
+                if member is None:
+                    member = guild.get_member(user_id)
+                if member is None:
+                    try:
+                        member = await self.bot.fetch_user(user_id)
+                    except discord.HTTPException:
+                        await message.reply("Could not find that user.")
+                        return
+        else:
+            async with get_session() as session:
+                db_user = await self._named_target(session, token, create=True)
+            name = token.removeprefix("@")
+            if db_user is not None and db_user.name is not None:
+                name = db_user.name
+        added_by = await self._added_by(message.author.id)
+        try:
+            quote, display = await self._add(
+                guild_id=guild.id,
+                added_by=added_by,
+                member=member,
+                name=name,
+                discord_author=discord_author,
+                text=text,
+            )
+        except queries.AlreadyQuoted:
+            await message.reply("That message has already been quoted.")
+            return
+        except CommandError as exc:
+            await message.reply(str(exc))
+            return
+        await message.reply(embed=quote_embed(quote, display), mention_author=False)
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        """`<prefix>q` / `<prefix>quote` as a reply to a message quotes that message."""
+        """`<prefix>q` shows, lists or adds quotes; as a reply it quotes the message."""
         if message.author.bot or message.guild is None:
             return
-        prefix = await queries.cached_prefix(message.guild.id)
-        tokens = message.content.split()
-        if not tokens or tokens[0].lower() not in {f"{prefix}q", f"{prefix}quote"}:
+        guild = message.guild
+        prefix = await queries.cached_prefix(guild.id)
+        words = message.content.split(maxsplit=1)
+        if not words or words[0].lower() not in {f"{prefix}q", f"{prefix}quote"}:
+            return
+        rest = words[1] if len(words) > 1 else ""
+        parsed = parse_quote_args(rest)
+        if parsed is not None:
+            mode, token, text = parsed
+            if mode == "list":
+                if token:
+                    await self._list_user_quotes(message, token, guild)
+                else:
+                    await message.reply("Give a user whose quotes to list.")
+            elif mode == "random":
+                await self._random_user_quote(message, token, guild)
+            else:
+                await self._add_to_user(message, token, text, guild)
             return
         reference = message.reference
         if reference is None or reference.message_id is None:
-            async with get_session() as session:
-                quote = await queries.get_random_quote(session, message.guild.id)
-                if quote is None:
-                    await message.reply("There are no quotes on this server yet.")
-                    return
-                author = await queries.get_user(session, quote.author)
-            display = user_display(author) if author is not None else "unknown"
-            await message.reply(
-                embed=quote_embed(quote, display),
-                view=FavoriteView(queries.row_pk(quote)),
-                mention_author=False,
-            )
+            await self._random_quote(message, guild)
             return
         target = reference.cached_message
         if target is None:
@@ -517,7 +747,7 @@ class QuoteCog(commands.Cog):
         added_by = await self._added_by(message.author.id)
         try:
             quote, display = await self._add(
-                guild_id=message.guild.id,
+                guild_id=guild.id,
                 added_by=added_by,
                 member=target.author,
                 name=None,

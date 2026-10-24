@@ -4,9 +4,9 @@ from typing import final, override
 import discord
 
 from . import queries
-from .constants import DEFAULT_QUOTE_EMOJI_NAME, MAX_QUOTE_LENGTH
+from .constants import DEFAULT_QUOTE_EMOJI_NAME
 from .db import get_session
-from .models import Quote, User
+from .models import DiscordUser, NamedUser, Quote
 
 type QuoteModalHandler = Callable[
     [discord.Interaction, str | None, str], Awaitable[None]
@@ -42,10 +42,8 @@ def quote_choice_name(quote: Quote) -> str:
     return text[: 100 - len(suffix)] + suffix
 
 
-def user_display(user: User) -> str:
-    if user.discord_id is not None:
-        return f"<@{user.discord_id}>"
-    return user.name or "unknown"
+def user_display(user: DiscordUser | NamedUser) -> str:
+    return user.display
 
 
 def paginate[T](items: list[T], per_page: int) -> list[list[T]]:
@@ -81,6 +79,7 @@ class QuoteModal(discord.ui.Modal):
         name: str | None,
         text: str | None,
         ask_name: bool,
+        max_length: int,
     ) -> None:
         super().__init__(title="Add Quote")
         self._handler: QuoteModalHandler = handler
@@ -101,7 +100,7 @@ class QuoteModal(discord.ui.Modal):
                 label="Quote",
                 style=discord.TextStyle.paragraph,
                 required=True,
-                max_length=MAX_QUOTE_LENGTH,
+                max_length=max_length,
             )
             self.add_item(self.text_input)
 
@@ -234,7 +233,7 @@ class FavoriteView(discord.ui.View):
                 session, interaction.user.id
             )
             now_favorite = await queries.toggle_favorite(
-                session, queries.row_pk(user), self.quote_id
+                session, user.id, self.quote_id
             )
         text = (
             "Added to your favorites."

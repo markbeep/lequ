@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .. import queries
+from ..constants import DEFAULT_MAX_QUOTE_LENGTH
 from ..db import get_session
 from ..models import Quote, Report, User
 from ..ui import ActionButton, emoji_key
@@ -137,7 +138,7 @@ class ReportsView(discord.ui.View):
             return
         _, quote, _ = self.entries[self.index]
         async with get_session() as session:
-            await queries.delete_quote(session, queries.row_pk(quote), self.guild_id)
+            await queries.delete_quote(session, quote.id, self.guild_id)
         await self._drop_current(interaction)
 
     async def _dismiss(self, interaction: discord.Interaction) -> None:
@@ -145,7 +146,7 @@ class ReportsView(discord.ui.View):
             return
         _, quote, _ = self.entries[self.index]
         async with get_session() as session:
-            await queries.delete_report(session, queries.row_pk(quote))
+            await queries.delete_report(session, quote.id)
         await self._drop_current(interaction)
 
     async def _close(self, interaction: discord.Interaction) -> None:
@@ -172,8 +173,8 @@ class AdminCog(commands.Cog):
     def __init__(self, bot: LequBot) -> None:
         self.bot: LequBot = bot
 
-    config = app_commands.Group(
-        name="config",
+    admin = app_commands.Group(
+        name="admin",
         description="Configure the quote bot",
         guild_only=True,
         default_permissions=discord.Permissions(manage_guild=True),
@@ -181,16 +182,16 @@ class AdminCog(commands.Cog):
     emojis = app_commands.Group(
         name="emojis",
         description="Quote emojis",
-        parent=config,
+        parent=admin,
         guild_only=True,
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
-    @config.command(name="prefix", description="Set the command prefix")
+    @admin.command(name="prefix", description="Set the command prefix")
     @app_commands.describe(value="New prefix; leave empty to reset to `$`")
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.guild_only()
-    async def config_prefix(
+    async def prefix(
         self, interaction: discord.Interaction, value: str | None = None
     ) -> None:
         if interaction.guild_id is None:
@@ -215,6 +216,39 @@ class AdminCog(commands.Cog):
         else:
             await interaction.response.send_message(
                 f"Prefix set to `{stored}`.", ephemeral=True
+            )
+
+    @admin.command(name="max-quote-length", description="Set the maximum quote length")
+    @app_commands.describe(
+        value=f"Maximum characters; leave empty to reset to {DEFAULT_MAX_QUOTE_LENGTH}"
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def max_quote_length(
+        self, interaction: discord.Interaction, value: int | None = None
+    ) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(
+                "This command can only be used in a server.", ephemeral=True
+            )
+            return
+        if value is not None and not 1 <= value <= 2000:
+            await interaction.response.send_message(
+                "The max quote length must be between 1 and 2000.", ephemeral=True
+            )
+            return
+        async with get_session() as session:
+            stored = await queries.set_max_quote_length(
+                session, interaction.guild_id, value
+            )
+        if value is None:
+            await interaction.response.send_message(
+                f"Max quote length reset to {DEFAULT_MAX_QUOTE_LENGTH}.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"Max quote length set to {stored}.", ephemeral=True
             )
 
     @emojis.command(name="add", description="Allow an emoji to add quotes")
@@ -284,7 +318,7 @@ class AdminCog(commands.Cog):
             return
         await interaction.response.send_message("\n".join(configured), ephemeral=True)
 
-    @app_commands.command(name="reports", description="View outstanding quote reports")
+    @admin.command(name="reports", description="View outstanding quote reports")
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.guild_only()
     async def reports(self, interaction: discord.Interaction) -> None:
