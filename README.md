@@ -13,6 +13,17 @@ just bot       # run the bot
 
 Logging uses discord.py's logging setup at `INFO`; database, quote, reaction, command and admin actions are logged.
 
+## Docker
+
+Images are published to `ghcr.io/markbeep/lequ` (`main` on every push, plus version tags). Migrations run on start, so run a single instance:
+
+```
+docker run -d --name lequ \
+  -e DISCORD_TOKEN=... \
+  -v lequ-data:/app/data \
+  ghcr.io/markbeep/lequ:main
+```
+
 ## Adding quotes
 
 - `/add` — add a quote. Omit arguments to be prompted with a form, or pass `member`/`name` and `text` directly. Length is limited by `/admin max-quote-length` (default 500).
