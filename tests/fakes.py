@@ -383,12 +383,13 @@ class FakeBot:
         self.fetches = 0
         self.fail_fetch = fail_fetch
         self.latency = 0.123
+        self.cache_channels: bool = True
 
     def get_guild(self, guild_id: int) -> FakeGuild | None:
         return self.guilds.get(guild_id)
 
     def get_channel(self, channel_id: int) -> FakeChannel | None:
-        return self.channels.get(channel_id)
+        return self.channels.get(channel_id) if self.cache_channels else None
 
     def get_user(self, user_id: int) -> discord.User | None:
         for guild in self.guilds.values():

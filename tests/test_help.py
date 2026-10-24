@@ -65,9 +65,26 @@ async def test_prefix_help_page() -> None:
     assert embed.title == "Lequ help"
     assert embed.color is not None and embed.color.value == EMBED_COLOR
     names = [field.name for field in embed.fields]
-    assert "Quotes" in names
-    assert "Aliases" in names
-    assert "Admin (Manage Server)" in names
+    assert names == ["Quotes", "Slash commands", "Aliases", "Admin (Manage Server)"]
+    slash = next(
+        field for field in embed.fields if field.name == "Slash commands"
+    ).value
+    assert slash is not None
+    for command in [
+        "/add",
+        "/quote",
+        "/quotes",
+        "/search",
+        "/favorites",
+        "/report",
+        "/help",
+    ]:
+        assert command in slash
+    aliases = next(field for field in embed.fields if field.name == "Aliases").value
+    assert aliases is not None
+    assert "/alias list <name>" in aliases
+    assert "(Manage Server)" in aliases
+    assert "-# " in aliases
 
 
 async def test_slash_help_page() -> None:
@@ -79,4 +96,4 @@ async def test_slash_help_page() -> None:
     embed = interaction.response.messages[0].embed
     assert embed is not None
     assert embed.title == "Lequ help"
-    assert len(embed.fields) == 3
+    assert len(embed.fields) == 4

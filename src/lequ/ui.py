@@ -5,7 +5,7 @@ from typing import final, override
 import discord
 
 from . import queries
-from .constants import DEFAULT_QUOTE_EMOJI_NAME
+from .constants import DEFAULT_QUOTE_EMOJI_NAME, ERROR_COLOR
 from .db import get_session
 from .models import Quote, QuotedMessage, User
 
@@ -45,8 +45,9 @@ async def respond(
     embed: discord.Embed | None = None,
     view: discord.ui.View | None = None,
     ephemeral: bool = False,
+    color: int | None = None,
 ) -> None:
-    embed = embed or discord.Embed(description=safe_text(content) or "")
+    embed = embed or discord.Embed(description=safe_text(content) or "", color=color)
     if view is None:
         await interaction.response.send_message(
             embed=embed, ephemeral=ephemeral, allowed_mentions=NO_MENTIONS
@@ -67,8 +68,9 @@ async def send_reply(
     embed: discord.Embed | None = None,
     view: discord.ui.View | None = None,
     mention_author: bool = False,
+    color: int | None = None,
 ) -> discord.Message:
-    embed = embed or discord.Embed(description=safe_text(content) or "")
+    embed = embed or discord.Embed(description=safe_text(content) or "", color=color)
     if view is None:
         return await message.reply(
             embed=embed,
@@ -81,6 +83,21 @@ async def send_reply(
         mention_author=mention_author,
         allowed_mentions=NO_MENTIONS,
     )
+
+
+async def respond_error(
+    interaction: discord.Interaction,
+    content: str | None = None,
+    *,
+    ephemeral: bool = True,
+) -> None:
+    await respond(interaction, content, ephemeral=ephemeral, color=ERROR_COLOR)
+
+
+async def send_error(
+    message: discord.Message, content: str | None = None
+) -> discord.Message:
+    return await send_reply(message, content, color=ERROR_COLOR)
 
 
 def emoji_key(raw: str) -> str:
@@ -159,7 +176,7 @@ def help_embed(prefix: str, max_length: int) -> discord.Embed:
     q = code_span(f"{safe_prefix}q")
     embed = discord.Embed(
         title="Lequ help",
-        description="Store and retrieve quotes.",
+        description="Store and retrieve quotes. The bot supports both text and slash commands, as well as message app actions (right-click a message > Apps > Add Quote).",
         color=EMBED_COLOR,
     )
     embed.add_field(
@@ -178,8 +195,27 @@ def help_embed(prefix: str, max_length: int) -> discord.Embed:
         inline=False,
     )
     embed.add_field(
+        name="Slash commands",
+        value=(
+            "`/add [member] [name] [text]` — add a quote\n"
+            "`/quote [id]` — show a quote (random if no id)\n"
+            "`/quotes [user] [ephemeral]` — list a user's quotes\n"
+            "`/search <query>` — search quotes\n"
+            "`/favorites list|add|remove` — manage your favorites\n"
+            "`/report <id>` — report a quote for deletion\n"
+            "`/help` — show this page"
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Aliases",
-        value="`/alias add <name> <alias>` — add\n`/alias remove <alias>` — remove",
+        value=(
+            "`/alias add <name> <alias>` — add *(Manage Server)*\n"
+            "`/alias remove <alias>` — remove *(Manage Server)*\n"
+            "`/alias list <name>` — list aliases\n"
+            "-# Aliases give a named user extra names: Given the alias 'albert' for the name 'einstein', quotes added as `albert` "
+            "all count for `einstein`."
+        ),
         inline=False,
     )
     embed.add_field(
@@ -332,7 +368,7 @@ class Paginator(discord.ui.View):
 
     async def _check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
-            await respond(interaction, "This menu isn't for you.", ephemeral=True)
+            await respond_error(interaction, "This menu isn't for you.")
             return False
         return True
 

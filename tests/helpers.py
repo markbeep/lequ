@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import discord
 
 from lequ import queries
+from lequ.constants import ERROR_COLOR
 from lequ.db import get_session
 from tests.fakes import SentMessage
 
@@ -55,6 +56,13 @@ def sent_text(sent: SentMessage) -> str:
     assert sent.content is None
     assert sent.embed is not None
     return sent.embed.description or ""
+
+
+def assert_error(sent: SentMessage, text: str) -> None:
+    assert sent.embed is not None
+    assert sent.embed.color is not None
+    assert sent.embed.color.value == ERROR_COLOR
+    assert sent_text(sent) == text
 
 
 def assert_embed_limits(embed: discord.Embed) -> None:

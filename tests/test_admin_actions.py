@@ -10,7 +10,7 @@ from lequ.ui import code_span, safe_text
 from tests.commands import group, invoke, subcommand, subgroup
 from tests.conftest import reset_db
 from tests.fakes import FakeBot, FakeInteraction, as_bot
-from tests.helpers import seed_base, sent_text
+from tests.helpers import assert_error, seed_base, sent_text
 
 
 def only_message(interaction: FakeInteraction) -> str:
@@ -147,6 +147,62 @@ async def test_emoji_add_rejects_text(emote: str) -> None:
     assert only_message(interaction) == "That is not a valid emoji."
     async with get_session() as session:
         assert await queries.get_emojis(session, 1) == []
+
+
+async def test_alias_add_creates_missing_named_user() -> None:
+    await reset_db()
+    cog = QuoteCog(as_bot(FakeBot()))
+    cmd = subcommand(group(cog, "alias"), "add")
+    interaction = FakeInteraction()
+    await invoke(cmd, cog, interaction, "albert-einstein", "einstein")
+    assert only_message(interaction) == "`einstein` now points to `albert-einstein`."
+    async with get_session() as session:
+        user = await queries.get_alias_user(session, "einstein")
+        assert user is not None
+        assert user.name == "albert-einstein"
+
+
+async def test_alias_add_rejects_taken_and_shadowing_names() -> None:
+    await reset_db()
+    await seed_base()
+    cog = QuoteCog(as_bot(FakeBot()))
+    cmd = subcommand(group(cog, "alias"), "add")
+
+    interaction = FakeInteraction()
+    await invoke(cmd, cog, interaction, "alice", "bobby")
+    assert_error(
+        interaction.response.messages[0], "`bobby` is already an alias for `bob`."
+    )
+
+    interaction = FakeInteraction()
+    await invoke(cmd, cog, interaction, "alice", "bob")
+    assert_error(
+        interaction.response.messages[0],
+        "The name `bob` is already used by another named user.",
+    )
+
+
+async def test_alias_list_resolves_aliases() -> None:
+    await reset_db()
+    await seed_base()
+    cog = QuoteCog(as_bot(FakeBot()))
+    cmd = subcommand(group(cog, "alias"), "list")
+
+    interaction = FakeInteraction()
+    await invoke(cmd, cog, interaction, "bobby")
+    assert only_message(interaction) == "Aliases for `bob`:\n- `bobby`"
+
+
+async def test_alias_list_unknown_user_is_error() -> None:
+    await reset_db()
+    cog = QuoteCog(as_bot(FakeBot()))
+    cmd = subcommand(group(cog, "alias"), "list")
+    interaction = FakeInteraction()
+    await invoke(cmd, cog, interaction, "nobody")
+    assert_error(
+        interaction.response.messages[0],
+        "There is no named user called `nobody`.",
+    )
 
 
 async def test_reports_with_no_reports_responds() -> None:

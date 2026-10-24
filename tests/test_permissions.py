@@ -5,6 +5,7 @@ import pytest
 
 from lequ import queries
 from lequ.cogs.admin import ReportsView
+from lequ.constants import ERROR_COLOR
 from lequ.db import get_session
 from tests.fakes import FakeInteraction
 from tests.helpers import seed_base, sent_text
@@ -15,13 +16,15 @@ DM_DENIED = "This command can only be used in a server."
 
 type Args = dict[str, object]
 
-ADMIN_COMMANDS: list[tuple[str, Args]] = [
+GATED_COMMANDS: list[tuple[str, Args]] = [
     ("admin.prefix", {"value": "!"}),
     ("admin.max-quote-length", {"value": 100}),
     ("admin.emote.add", {"emote": "👍"}),
     ("admin.emote.remove", {"emote": "👍"}),
     ("admin.emote.list", {}),
     ("admin.reports", {}),
+    ("alias.add", {"name": "alice", "alias": "bobby"}),
+    ("alias.remove", {"alias": "bobby"}),
 ]
 
 
@@ -36,17 +39,20 @@ async def total_quotes(world: World) -> int:
     return total
 
 
-@pytest.mark.parametrize(("command", "args"), ADMIN_COMMANDS)
-async def test_admin_commands_deny_plain_member(
+@pytest.mark.parametrize(("command", "args"), GATED_COMMANDS)
+async def test_gated_commands_deny_plain_member(
     world: World, command: str, args: Args
 ) -> None:
     alice = world.member(1, "alice", permissions=NO_PERMISSIONS)
     interaction = await world.slash(alice, command, args)
     assert only_text(interaction) == DENIED
+    assert interaction.response.messages[0].embed is not None
+    assert interaction.response.messages[0].embed.color is not None
+    assert interaction.response.messages[0].embed.color.value == ERROR_COLOR
 
 
-@pytest.mark.parametrize(("command", "args"), ADMIN_COMMANDS)
-async def test_admin_commands_allow_manage_server(
+@pytest.mark.parametrize(("command", "args"), GATED_COMMANDS)
+async def test_gated_commands_allow_manage_server(
     world: World, command: str, args: Args
 ) -> None:
     admin = world.member(2, "admin", permissions=ADMIN)
@@ -83,7 +89,7 @@ async def test_admin_commands_reject_dm(world: World, command: str, args: Args) 
         ("favorites.list", {}),
         ("report", {"quote_id": 1}),
         ("search", {"query": "anything"}),
-        ("alias.add", {"name": "alice", "alias": "bobby"}),
+        ("alias.list", {"name": "alice"}),
         ("help", {}),
     ],
 )

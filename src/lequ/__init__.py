@@ -6,7 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from . import queries
-from .constants import DEFAULT_PREFIX
+from .constants import DEFAULT_PREFIX, ERROR_COLOR
 from .env import Settings
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ async def on_app_command_error(
         logger.exception("application command failed", exc_info=error)
         message = "Something went wrong."
     allowed_mentions = discord.AllowedMentions.none()
-    embed = discord.Embed(description=message)
+    embed = discord.Embed(description=message, color=ERROR_COLOR)
     if interaction.response.is_done():
         await interaction.followup.send(
             embed=embed, ephemeral=True, allowed_mentions=allowed_mentions

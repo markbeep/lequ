@@ -1,6 +1,6 @@
 # **Le**cturfier **Qu**otes
 
-Discord bot for storing and retrieving quotes.
+Discord bot for storing and retrieving quotes. Singles out the key quote functionality from [Lecturfier](https://github.com/markbeep/Lecturfier), while adding slash support on top.
 
 ## Setup
 
@@ -37,6 +37,7 @@ docker run -d --name lequ \
   - `all <user>` or `<user> all` lists that user's quotes;
   - `<user> <text>` adds a quote for that user.
   - `<user>` may be a mention, a named user, or an alias; a numeric Discord ID works when listing or adding.
+- Aliases let several names resolve to one named user.
 - React with a configured quote emoji (by default any custom emoji named `AddQuote`).
 - `$help` or `/help` — show the quote and admin command reference.
 
@@ -44,20 +45,21 @@ Quotes added from a message store that message's id, so the same message can onl
 
 ## Commands
 
-| Command                           | Description                                                 |
-| --------------------------------- | ----------------------------------------------------------- |
-| `/add [member] [name] [text]`     | Add a quote                                                 |
-| `/quote [id]`                     | Show a quote (random if no id)                              |
-| `/quotes [user] [ephemeral]`      | List a user's quotes                                        |
-| `/search <query>`                 | Search quotes with autocomplete                             |
-| `/favorites list\|add\|remove`    | Manage your own favorites                                   |
-| `/report <quote_id>`              | Report a quote for deletion                                 |
-| `/help`                           | Show usage and admin commands                               |
-| `/alias add <name> <alias>`       | Add an alias for a named user                               |
-| `/alias remove <alias>`           | Remove an alias                                             |
-| `/admin reports`                  | Review reports and delete or dismiss them _(Manage Server)_ |
-| `/admin max-quote-length [value]` | Set the max quote length _(Manage Server)_                  |
-| `/admin prefix [value]`           | Set the command prefix _(Manage Server)_                    |
-| `/admin emote add\|remove\|list`  | Configure quote adding emojis _(Manage Server)_             |
+| Command                           | Description                                                       |
+| --------------------------------- | ----------------------------------------------------------------- |
+| `/add [member] [name] [text]`     | Add a quote                                                       |
+| `/quote [id]`                     | Show a quote (random if no id)                                    |
+| `/quotes [user] [ephemeral]`      | List a user's quotes                                              |
+| `/search <query>`                 | Search quotes with autocomplete                                   |
+| `/favorites list\|add\|remove`    | Manage your own favorites                                         |
+| `/report <quote_id>`              | Report a quote for deletion                                       |
+| `/help`                           | Show usage and admin commands                                     |
+| `/alias add <name> <alias>`       | Add an alias, creating the named user if needed _(Manage Server)_ |
+| `/alias remove <alias>`           | Remove an alias _(Manage Server)_                                 |
+| `/alias list <name>`              | List aliases of a named user                                      |
+| `/admin reports`                  | Review reports and delete or dismiss them _(Manage Server)_       |
+| `/admin max-quote-length [value]` | Set the max quote length _(Manage Server)_                        |
+| `/admin prefix [value]`           | Set the command prefix _(Manage Server)_                          |
+| `/admin emote add\|remove\|list`  | Configure quote adding emojis _(Manage Server)_                   |
 
 Quotes shown by `/quote` and `/search` carry a ⭐ button that toggles the quote in the clicking user's favorites.

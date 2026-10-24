@@ -76,7 +76,7 @@ async def test_prefix_response_wraps_prefix_in_matching_fence(world: World) -> N
 
 async def test_alias_responses_survive_backticks(world: World) -> None:
     await seed_base()
-    alice = world.member(1, "alice", permissions=NO_PERMISSIONS)
+    alice = world.member(1, "alice", permissions=ADMIN)
 
     added = await world.slash(alice, "alias.add", {"name": "alice", "alias": "`"})
     assert "`` ` `` now points to `alice`" in sent_text(added.response.messages[0])
@@ -85,12 +85,10 @@ async def test_alias_responses_survive_backticks(world: World) -> None:
     assert sent_text(removed.response.messages[0]) == "Removed `` ` ``."
 
 
-async def test_alias_error_survives_backticks(world: World) -> None:
-    alice = world.member(1, "alice", permissions=NO_PERMISSIONS)
+async def test_alias_creates_missing_user_with_backticks(world: World) -> None:
+    alice = world.member(1, "alice", permissions=ADMIN)
     interaction = await world.slash(alice, "alias.add", {"name": "`", "alias": "x"})
-    assert sent_text(interaction.response.messages[0]) == (
-        "There is no named user called `` ` ``."
-    )
+    assert sent_text(interaction.response.messages[0]) == ("`x` now points to `` ` ``.")
 
 
 async def test_reaction_quote_keeps_genuine_source_link(world: World) -> None:
@@ -154,7 +152,7 @@ async def test_report_reason_cannot_break_report_view(world: World) -> None:
     assert isinstance(modal, ReportModal)
     modal.reason_input._value = "`@everyone` " * 50  # pyright: ignore[reportPrivateUsage]
     submitted = await world.submit(reporter, modal)
-    assert "Reported quote" in sent_text(submitted.response.messages[0])
+    assert "Successfully requested quote" in sent_text(submitted.response.messages[0])
 
     reports = await world.slash(admin, "admin.reports")
     sent = reports.response.messages[0]

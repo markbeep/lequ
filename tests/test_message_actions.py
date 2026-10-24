@@ -20,7 +20,12 @@ from tests.fakes import (
     as_interaction,
     as_message,
 )
-from tests.helpers import assert_no_pings, quote_count, seed_base, sent_text
+from tests.helpers import (
+    assert_error,
+    assert_no_pings,
+    quote_count,
+    seed_base,
+)
 
 
 @st.composite
@@ -83,15 +88,15 @@ async def test_message_commands_always_answer_or_ignore(content: str) -> None:
 async def test_empty_server_random_quote_gets_error() -> None:
     await reset_db()
     message = await run_message("$q")
-    assert sent_text(message.replies[0]) == "There are no quotes on this server yet."
+    assert_error(message.replies[0], "There are no quotes on this server yet.")
 
 
 async def test_unknown_user_gets_error() -> None:
     await reset_db()
     message = await run_message("$q nobody")
-    assert sent_text(message.replies[0]) == "nobody doesn't have any quotes."
+    assert_error(message.replies[0], "nobody doesn't have any quotes.")
     message = await run_message("$q all nobody")
-    assert sent_text(message.replies[0]) == "nobody doesn't have any quotes."
+    assert_error(message.replies[0], "nobody doesn't have any quotes.")
 
 
 async def test_numeric_token_shows_quote_by_id() -> None:
@@ -111,7 +116,7 @@ async def test_numeric_token_shows_quote_by_id() -> None:
     assert embed.thumbnail.url == "https://cdn.discordapp.com/avatars/123.png"
 
     message = await run_message("$q 999999")
-    assert sent_text(message.replies[0]) == "No quote with that ID on this server."
+    assert_error(message.replies[0], "Quote ID `999999` does not exist!")
 
 
 async def test_all_without_user_shows_quote_stats() -> None:
@@ -156,23 +161,30 @@ async def test_too_long_quote_gets_error() -> None:
     async with get_session() as session:
         await queries.set_max_quote_length(session, 1, 5)
     message = await run_message("$q alice 123456")
-    assert sent_text(message.replies[0]) == "Quotes are limited to 5 characters."
+    assert_error(
+        message.replies[0],
+        "This quote exceeds the maximum length of 5 characters.",
+    )
 
 
 async def test_duplicate_quote_gets_error() -> None:
     await reset_db()
     await seed_base()
     message = await run_message("$q alice alice quote")
-    assert sent_text(message.replies[0]) == "That message has already been quoted."
+    assert_error(message.replies[0], "This quote has been added already.")
 
 
 async def test_self_quote_gets_error() -> None:
     await reset_db()
     await seed_base()
     message = await run_message("$q <@42> hello")
-    assert sent_text(message.replies[0]) == "You can't quote yourself."
+    self_quote = (
+        "You can't quote yourself. That's pretty lame.\n"
+        "-# Or your username is the same as the person you're trying to quote."
+    )
+    assert_error(message.replies[0], self_quote)
     message = await run_message("$q 42 hello again")
-    assert sent_text(message.replies[0]) == "You can't quote yourself."
+    assert_error(message.replies[0], self_quote)
 
 
 async def test_alias_routes_to_canonical_named_user() -> None:
@@ -185,6 +197,23 @@ async def test_alias_routes_to_canonical_named_user() -> None:
     assert embed.footer.text.startswith("- bob | ID: ")
     assert embed.thumbnail.url is None
     assert await quote_count(seeded.bob_id) == 2
+
+
+async def test_alias_created_named_user_collects_quotes() -> None:
+    await reset_db()
+    async with get_session() as session:
+        await queries.add_alias(session, "albert-einstein", "albert")
+        await queries.add_alias(session, "albert-einstein", "einstein")
+
+    message = await run_message("$q albert smart quote")
+    assert message.replies[0].embed is not None
+    message = await run_message("$q einstein another quote")
+    assert message.replies[0].embed is not None
+
+    async with get_session() as session:
+        user = await queries.get_named_user(session, "albert-einstein")
+        assert user is not None
+        assert len(await queries.get_quotes_by_author(session, user.id, 1)) == 2
 
 
 async def test_mention_and_numeric_id_add_quotes() -> None:
@@ -238,14 +267,14 @@ async def test_reply_quotes_target_and_rejects_bad_targets() -> None:
     message = await run_message(
         "$q", reference=FakeReference(target.id, target), channel=channel
     )
-    assert sent_text(message.replies[0]) == "That message has already been quoted."
+    assert_error(message.replies[0], "This quote has been added already.")
 
     empty = FakeMessage("   ", FakeUser(55, "Target"), FakeGuild(), channel=channel)
     channel.messages[empty.id] = empty
     message = await run_message(
         "$q", reference=FakeReference(empty.id, empty), channel=channel
     )
-    assert sent_text(message.replies[0]) == "Can't quote that message."
+    assert_error(message.replies[0], "You can't quote bot messages or empty messages.")
 
     bot_target = FakeMessage(
         "bot text", FakeUser(55, "Bot", bot=True), FakeGuild(), channel=channel
@@ -254,12 +283,12 @@ async def test_reply_quotes_target_and_rejects_bad_targets() -> None:
     message = await run_message(
         "$q", reference=FakeReference(bot_target.id, bot_target), channel=channel
     )
-    assert sent_text(message.replies[0]) == "Can't quote that message."
+    assert_error(message.replies[0], "You can't quote bot messages or empty messages.")
 
     message = await run_message(
         "$q", reference=FakeReference(999999, None), channel=channel
     )
-    assert sent_text(message.replies[0]) == "Could not find the replied message."
+    assert_error(message.replies[0], "Could not find the message you replied to.")
 
 
 async def test_quoted_message_links_its_source() -> None:

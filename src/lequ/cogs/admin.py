@@ -9,7 +9,15 @@ from .. import LequBot, queries
 from ..constants import DEFAULT_MAX_QUOTE_LENGTH
 from ..db import get_session
 from ..models import Quote, Report, User
-from ..ui import ActionButton, code_span, emoji_key, is_emoji, respond, safe_text
+from ..ui import (
+    ActionButton,
+    code_span,
+    emoji_key,
+    is_emoji,
+    respond,
+    respond_error,
+    safe_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +98,7 @@ class ReportsView(discord.ui.View):
             not isinstance(user, discord.Member)
             or not user.guild_permissions.manage_guild
         ):
-            await respond(
-                interaction, "You need the Manage Server permission.", ephemeral=True
-            )
+            await respond_error(interaction, "You need the Manage Server permission.")
             return False
         return True
 
@@ -210,19 +216,16 @@ class AdminCog(commands.Cog):
         self, interaction: discord.Interaction, value: str | None = None
     ) -> None:
         if interaction.guild_id is None:
-            await respond(
-                interaction,
-                "This command can only be used in a server.",
-                ephemeral=True,
+            await respond_error(
+                interaction, "This command can only be used in a server."
             )
             return
         if value is not None and (
             not 1 <= len(value) <= 10 or any(c.isspace() for c in value)
         ):
-            await respond(
+            await respond_error(
                 interaction,
                 "The prefix must be 1 to 10 characters without whitespace.",
-                ephemeral=True,
             )
             return
         async with get_session() as session:
@@ -244,17 +247,14 @@ class AdminCog(commands.Cog):
         self, interaction: discord.Interaction, value: int | None = None
     ) -> None:
         if interaction.guild_id is None:
-            await respond(
-                interaction,
-                "This command can only be used in a server.",
-                ephemeral=True,
+            await respond_error(
+                interaction, "This command can only be used in a server."
             )
             return
         if value is not None and not 1 <= value <= 2000:
-            await respond(
+            await respond_error(
                 interaction,
                 "The max quote length must be between 1 and 2000.",
-                ephemeral=True,
             )
             return
         async with get_session() as session:
@@ -278,14 +278,12 @@ class AdminCog(commands.Cog):
     @app_commands.guild_only()
     async def emojis_add(self, interaction: discord.Interaction, emote: str) -> None:
         if interaction.guild_id is None:
-            await respond(
-                interaction,
-                "This command can only be used in a server.",
-                ephemeral=True,
+            await respond_error(
+                interaction, "This command can only be used in a server."
             )
             return
         if not is_emoji(emote):
-            await respond(interaction, "That is not a valid emoji.", ephemeral=True)
+            await respond_error(interaction, "That is not a valid emoji.")
             return
         async with get_session() as session:
             added = await queries.add_emoji(
@@ -294,9 +292,7 @@ class AdminCog(commands.Cog):
         if added:
             await respond(interaction, "Added.", ephemeral=True)
         else:
-            await respond(
-                interaction, "That emoji is already configured.", ephemeral=True
-            )
+            await respond_error(interaction, "That emoji is already configured.")
 
     @emojis.command(name="remove", description="Disallow an emoji from adding quotes")
     @app_commands.describe(emote="The emoji to disallow")
@@ -304,10 +300,8 @@ class AdminCog(commands.Cog):
     @app_commands.guild_only()
     async def emojis_remove(self, interaction: discord.Interaction, emote: str) -> None:
         if interaction.guild_id is None:
-            await respond(
-                interaction,
-                "This command can only be used in a server.",
-                ephemeral=True,
+            await respond_error(
+                interaction, "This command can only be used in a server."
             )
             return
         async with get_session() as session:
@@ -317,17 +311,15 @@ class AdminCog(commands.Cog):
         if removed:
             await respond(interaction, "Removed.", ephemeral=True)
         else:
-            await respond(interaction, "That emoji is not configured.", ephemeral=True)
+            await respond_error(interaction, "That emoji is not configured.")
 
     @emojis.command(name="list", description="List the quote emojis for this server")
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.guild_only()
     async def emojis_list(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:
-            await respond(
-                interaction,
-                "This command can only be used in a server.",
-                ephemeral=True,
+            await respond_error(
+                interaction, "This command can only be used in a server."
             )
             return
         async with get_session() as session:
@@ -346,10 +338,8 @@ class AdminCog(commands.Cog):
     @app_commands.guild_only()
     async def reports(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:
-            await respond(
-                interaction,
-                "This command can only be used in a server.",
-                ephemeral=True,
+            await respond_error(
+                interaction, "This command can only be used in a server."
             )
             return
         async with get_session() as session:

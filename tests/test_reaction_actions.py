@@ -1,4 +1,7 @@
+import logging
+
 import discord
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -103,6 +106,51 @@ async def test_configured_emoji_matches_and_bot_is_ignored() -> None:
         )
     )
     assert bot_message.reactions == []
+
+
+async def test_reaction_works_when_channel_is_not_cached() -> None:
+    await reset_db()
+    await seed_base()
+    message = FakeMessage("uncached channel quote", FakeUser(55, "Author"), FakeGuild())
+    channel = FakeChannel()
+    channel.messages[message.id] = message
+    bot_client = FakeBot()
+    bot_client.cache_channels = False
+    bot_client.channels[channel.id] = channel
+
+    await QuoteCog(as_bot(bot_client)).on_raw_reaction_add(
+        FakePayload(
+            channel_id=channel.id,
+            message_id=message.id,
+            member=FakeUser(42, "Tester"),
+        )
+    )
+    assert message.reactions == ["✅"]
+
+
+async def test_reaction_failure_is_logged_as_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    await reset_db()
+    await seed_base()
+    message = FakeMessage("   ", FakeUser(55, "Author"), FakeGuild())
+    channel = FakeChannel()
+    channel.messages[message.id] = message
+    bot_client = FakeBot()
+    bot_client.channels[channel.id] = channel
+
+    with caplog.at_level(logging.ERROR):
+        await QuoteCog(as_bot(bot_client)).on_raw_reaction_add(
+            FakePayload(
+                channel_id=channel.id,
+                message_id=message.id,
+                member=FakeUser(42, "Tester"),
+            )
+        )
+    assert any(
+        "quote not added" in record.message and "empty" in record.message
+        for record in caplog.records
+    )
 
 
 async def test_member_can_be_fetched_when_payload_has_none() -> None:

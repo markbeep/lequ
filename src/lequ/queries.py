@@ -28,12 +28,16 @@ class DuplicateReport(Exception):
     """The quote already has an outstanding report."""
 
 
-class NotNamedUser(Exception):
-    """Aliases can only be assigned to named users."""
-
-
 class AliasShadowed(Exception):
     """The alias is already the name of another named user."""
+
+
+class AliasTaken(Exception):
+    """The alias already points to another named user."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.name: str = name
 
 
 logger = logging.getLogger(__name__)
@@ -104,11 +108,17 @@ async def get_alias_user(session: AsyncSession, alias: str) -> User | None:
 async def add_alias(session: AsyncSession, name: str, alias: str) -> bool:
     user = await get_named_user(session, name)
     if user is None:
-        raise NotNamedUser
+        user = await get_alias_user(session, name)
+    if user is None:
+        user = await get_or_create_named_user(session, name)
     shadow = await get_named_user(session, alias)
     if shadow is not None and shadow.id != user.id:
         logger.info("alias %r rejected: shadows named user %r", alias, alias)
         raise AliasShadowed
+    existing = await get_alias_user(session, alias)
+    if existing is not None and existing.id != user.id:
+        logger.info("alias %r rejected: already points to %r", alias, existing.name)
+        raise AliasTaken(existing.name or str(existing.discord_id))
     logger.info("adding alias %r for named user %r", alias, name)
     session.add(Aliases(user_id=user.id, alias=alias))
     try:
@@ -117,6 +127,15 @@ async def add_alias(session: AsyncSession, name: str, alias: str) -> bool:
         await session.rollback()
         return False
     return True
+
+
+async def get_aliases(session: AsyncSession, user_id: int) -> list[str]:
+    result = await session.exec(
+        select(Aliases.alias)
+        .where(col(Aliases.user_id) == user_id)
+        .order_by(col(Aliases.alias))
+    )
+    return list(result.all())
 
 
 async def remove_alias(session: AsyncSession, alias: str) -> bool:
