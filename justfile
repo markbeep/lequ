@@ -11,3 +11,7 @@ upgrade:
 
 downgrade:
     uv run alembic downgrade base
+
+upgrade-deps:
+    uv lock --upgrade
+    uv sync
