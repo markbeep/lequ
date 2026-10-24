@@ -11,6 +11,7 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "alembic>=1.20.0",
     "discord-py>=2.7.1",
+    "greenlet>=3.5.6",
     "pydantic-settings>=2.15.0",
     "sqlmodel>=0.0.47",
 ]
@@ -25,8 +26,16 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "basedpyright>=1.40.1",
+    "hypothesis>=6.170.9",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
     "ruff>=0.17.2",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore:(?s).*session\\.exec.*:DeprecationWarning"]
 
 [tool.basedpyright]
 typeCheckingMode = "all"

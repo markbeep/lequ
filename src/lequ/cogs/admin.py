@@ -1,17 +1,14 @@
-from typing import TYPE_CHECKING, final, override
+from typing import final, override
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .. import queries
+from .. import LequBot, queries
 from ..constants import DEFAULT_MAX_QUOTE_LENGTH
 from ..db import get_session
 from ..models import Quote, Report, User
-from ..ui import ActionButton, emoji_key
-
-if TYPE_CHECKING:
-    from .. import LequBot
+from ..ui import ActionButton, emoji_key, respond, safe_text
 
 QUOTE_PREVIEW_LENGTH = 500
 
@@ -72,10 +69,14 @@ class ReportsView(discord.ui.View):
             name="Reported by", value=f"<@{reporter.discord_id}>", inline=False
         )
         embed.add_field(
-            name="Quote", value=quote.text[:QUOTE_PREVIEW_LENGTH], inline=False
+            name="Quote",
+            value=(safe_text(quote.text) or "")[:QUOTE_PREVIEW_LENGTH],
+            inline=False,
         )
         embed.add_field(
-            name="Reason", value=report.reason or "*No reason given.*", inline=False
+            name="Reason",
+            value=safe_text(report.reason) or "*No reason given.*",
+            inline=False,
         )
         embed.set_footer(text=f"Page {self.index + 1}/{len(self.entries)}")
         return embed
@@ -86,8 +87,8 @@ class ReportsView(discord.ui.View):
             not isinstance(user, discord.Member)
             or not user.guild_permissions.manage_guild
         ):
-            await interaction.response.send_message(
-                "You need the Manage Server permission.", ephemeral=True
+            await respond(
+                interaction, "You need the Manage Server permission.", ephemeral=True
             )
             return False
         return True
@@ -195,14 +196,17 @@ class AdminCog(commands.Cog):
         self, interaction: discord.Interaction, value: str | None = None
     ) -> None:
         if interaction.guild_id is None:
-            await interaction.response.send_message(
-                "This command can only be used in a server.", ephemeral=True
+            await respond(
+                interaction,
+                "This command can only be used in a server.",
+                ephemeral=True,
             )
             return
         if value is not None and (
             not 1 <= len(value) <= 10 or any(c.isspace() for c in value)
         ):
-            await interaction.response.send_message(
+            await respond(
+                interaction,
                 "The prefix must be 1 to 10 characters without whitespace.",
                 ephemeral=True,
             )
@@ -210,13 +214,9 @@ class AdminCog(commands.Cog):
         async with get_session() as session:
             stored = await queries.set_prefix(session, interaction.guild_id, value)
         if value is None:
-            await interaction.response.send_message(
-                "Prefix reset to `$`.", ephemeral=True
-            )
+            await respond(interaction, "Prefix reset to `$`.", ephemeral=True)
         else:
-            await interaction.response.send_message(
-                f"Prefix set to `{stored}`.", ephemeral=True
-            )
+            await respond(interaction, f"Prefix set to `{stored}`.", ephemeral=True)
 
     @admin.command(name="max-quote-length", description="Set the maximum quote length")
     @app_commands.describe(
@@ -228,13 +228,17 @@ class AdminCog(commands.Cog):
         self, interaction: discord.Interaction, value: int | None = None
     ) -> None:
         if interaction.guild_id is None:
-            await interaction.response.send_message(
-                "This command can only be used in a server.", ephemeral=True
+            await respond(
+                interaction,
+                "This command can only be used in a server.",
+                ephemeral=True,
             )
             return
         if value is not None and not 1 <= value <= 2000:
-            await interaction.response.send_message(
-                "The max quote length must be between 1 and 2000.", ephemeral=True
+            await respond(
+                interaction,
+                "The max quote length must be between 1 and 2000.",
+                ephemeral=True,
             )
             return
         async with get_session() as session:
@@ -242,13 +246,14 @@ class AdminCog(commands.Cog):
                 session, interaction.guild_id, value
             )
         if value is None:
-            await interaction.response.send_message(
+            await respond(
+                interaction,
                 f"Max quote length reset to {DEFAULT_MAX_QUOTE_LENGTH}.",
                 ephemeral=True,
             )
         else:
-            await interaction.response.send_message(
-                f"Max quote length set to {stored}.", ephemeral=True
+            await respond(
+                interaction, f"Max quote length set to {stored}.", ephemeral=True
             )
 
     @emojis.command(name="add", description="Allow an emoji to add quotes")
@@ -257,25 +262,25 @@ class AdminCog(commands.Cog):
     @app_commands.guild_only()
     async def emojis_add(self, interaction: discord.Interaction, emote: str) -> None:
         if interaction.guild_id is None:
-            await interaction.response.send_message(
-                "This command can only be used in a server.", ephemeral=True
+            await respond(
+                interaction,
+                "This command can only be used in a server.",
+                ephemeral=True,
             )
             return
         partial = discord.PartialEmoji.from_str(emote)
         if partial.id is None and not partial.is_unicode_emoji():
-            await interaction.response.send_message(
-                "That is not a valid emoji.", ephemeral=True
-            )
+            await respond(interaction, "That is not a valid emoji.", ephemeral=True)
             return
         async with get_session() as session:
             added = await queries.add_emoji(
                 session, interaction.guild_id, emoji_key(emote)
             )
         if added:
-            await interaction.response.send_message("Added.", ephemeral=True)
+            await respond(interaction, "Added.", ephemeral=True)
         else:
-            await interaction.response.send_message(
-                "That emoji is already configured.", ephemeral=True
+            await respond(
+                interaction, "That emoji is already configured.", ephemeral=True
             )
 
     @emojis.command(name="remove", description="Disallow an emoji from adding quotes")
@@ -284,8 +289,10 @@ class AdminCog(commands.Cog):
     @app_commands.guild_only()
     async def emojis_remove(self, interaction: discord.Interaction, emote: str) -> None:
         if interaction.guild_id is None:
-            await interaction.response.send_message(
-                "This command can only be used in a server.", ephemeral=True
+            await respond(
+                interaction,
+                "This command can only be used in a server.",
+                ephemeral=True,
             )
             return
         async with get_session() as session:
@@ -293,51 +300,52 @@ class AdminCog(commands.Cog):
                 session, interaction.guild_id, emoji_key(emote)
             )
         if removed:
-            await interaction.response.send_message("Removed.", ephemeral=True)
+            await respond(interaction, "Removed.", ephemeral=True)
         else:
-            await interaction.response.send_message(
-                "That emoji is not configured.", ephemeral=True
-            )
+            await respond(interaction, "That emoji is not configured.", ephemeral=True)
 
     @emojis.command(name="list", description="List the quote emojis for this server")
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.guild_only()
     async def emojis_list(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:
-            await interaction.response.send_message(
-                "This command can only be used in a server.", ephemeral=True
+            await respond(
+                interaction,
+                "This command can only be used in a server.",
+                ephemeral=True,
             )
             return
         async with get_session() as session:
             configured = await queries.get_emojis(session, interaction.guild_id)
         if not configured:
-            await interaction.response.send_message(
+            await respond(
+                interaction,
                 "No emojis configured. The custom emoji named 'AddQuote' is used by default.",
                 ephemeral=True,
             )
             return
-        await interaction.response.send_message("\n".join(configured), ephemeral=True)
+        await respond(interaction, "\n".join(configured), ephemeral=True)
 
     @admin.command(name="reports", description="View outstanding quote reports")
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.guild_only()
     async def reports(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:
-            await interaction.response.send_message(
-                "This command can only be used in a server.", ephemeral=True
+            await respond(
+                interaction,
+                "This command can only be used in a server.",
+                ephemeral=True,
             )
             return
         async with get_session() as session:
             entries = await queries.get_reports(session, interaction.guild_id)
         if not entries:
-            await interaction.response.send_message(
-                "There are no outstanding reports.", ephemeral=True
+            await respond(
+                interaction, "There are no outstanding reports.", ephemeral=True
             )
             return
         view = ReportsView(entries, interaction.guild_id)
-        await interaction.response.send_message(
-            embed=view.embed(), view=view, ephemeral=True
-        )
+        await respond(interaction, embed=view.embed(), view=view, ephemeral=True)
         view.message = await interaction.original_response()
 
 

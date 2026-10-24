@@ -8,7 +8,10 @@ format:
 
 check:
     uv run ruff format --check .
-    uv run basedpyright src
+    uv run basedpyright src tests
+
+test:
+    uv run pytest
 
 revision message:
     uv run alembic revision --autogenerate -m "{{ message }}"

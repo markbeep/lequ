@@ -14,6 +14,58 @@ type QuoteModalHandler = Callable[
 type ReportModalHandler = Callable[[discord.Interaction, str | None], Awaitable[None]]
 type ButtonAction = Callable[[discord.Interaction], Awaitable[None]]
 
+NO_MENTIONS = discord.AllowedMentions.none()
+
+
+def safe_text(content: str | None) -> str | None:
+    """Neutralize @everyone/@here in user-controlled message content."""
+    return None if content is None else discord.utils.escape_mentions(content)
+
+
+async def respond(
+    interaction: discord.Interaction,
+    content: str | None = None,
+    *,
+    embed: discord.Embed | None = None,
+    view: discord.ui.View | None = None,
+    ephemeral: bool = False,
+) -> None:
+    embed = embed or discord.Embed(description=safe_text(content) or "")
+    if view is None:
+        await interaction.response.send_message(
+            embed=embed, ephemeral=ephemeral, allowed_mentions=NO_MENTIONS
+        )
+    else:
+        await interaction.response.send_message(
+            embed=embed,
+            view=view,
+            ephemeral=ephemeral,
+            allowed_mentions=NO_MENTIONS,
+        )
+
+
+async def send_reply(
+    message: discord.Message,
+    content: str | None = None,
+    *,
+    embed: discord.Embed | None = None,
+    view: discord.ui.View | None = None,
+    mention_author: bool = False,
+) -> discord.Message:
+    embed = embed or discord.Embed(description=safe_text(content) or "")
+    if view is None:
+        return await message.reply(
+            embed=embed,
+            mention_author=mention_author,
+            allowed_mentions=NO_MENTIONS,
+        )
+    return await message.reply(
+        embed=embed,
+        view=view,
+        mention_author=mention_author,
+        allowed_mentions=NO_MENTIONS,
+    )
+
 
 def emoji_key(raw: str) -> str:
     """Canonical stored/compared form of an emoji string."""
@@ -30,7 +82,9 @@ def emoji_matches(emoji: discord.PartialEmoji, configured: list[str]) -> bool:
 
 
 def quote_embed(quote: Quote, display: str) -> discord.Embed:
-    embed = discord.Embed(description=quote.text, color=0x404648)
+    embed = discord.Embed(
+        description=discord.utils.escape_mentions(quote.text), color=0x404648
+    )
     embed.set_footer(text=f"-{display} | ID: {quote.id}")
     return embed
 
@@ -162,9 +216,7 @@ class Paginator(discord.ui.View):
 
     async def _check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "This menu isn't for you.", ephemeral=True
-            )
+            await respond(interaction, "This menu isn't for you.", ephemeral=True)
             return False
         return True
 
@@ -240,4 +292,4 @@ class FavoriteView(discord.ui.View):
             if now_favorite
             else "Removed from your favorites."
         )
-        await interaction.response.send_message(text, ephemeral=True)
+        await respond(interaction, text, ephemeral=True)

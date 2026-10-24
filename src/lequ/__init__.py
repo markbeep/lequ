@@ -49,10 +49,16 @@ async def on_app_command_error(
     else:
         traceback.print_exception(type(error), error, error.__traceback__)
         message = "Something went wrong."
+    allowed_mentions = discord.AllowedMentions.none()
+    embed = discord.Embed(description=message)
     if interaction.response.is_done():
-        await interaction.followup.send(message, ephemeral=True)
+        await interaction.followup.send(
+            embed=embed, ephemeral=True, allowed_mentions=allowed_mentions
+        )
     else:
-        await interaction.response.send_message(message, ephemeral=True)
+        await interaction.response.send_message(
+            embed=embed, ephemeral=True, allowed_mentions=allowed_mentions
+        )
 
 
 def main() -> None:
