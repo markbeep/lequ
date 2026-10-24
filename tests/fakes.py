@@ -4,6 +4,7 @@ from typing import cast, override
 
 import aiohttp
 import discord
+from discord.ext import commands
 
 from lequ import LequBot
 
@@ -214,6 +215,21 @@ class FakeMessage:
         self.deleted = True
 
 
+class FakeContext:
+    message: FakeMessage
+
+    def __init__(self, message: FakeMessage) -> None:
+        self.message = message
+
+    @property
+    def guild(self) -> FakeGuild:
+        return self.message.guild
+
+    @property
+    def author(self) -> FakeUser:
+        return self.message.author
+
+
 class _FakePayload:
     guild_id: int
     channel_id: int
@@ -303,3 +319,7 @@ def as_message(fake: FakeMessage) -> discord.Message:
 
 def as_interaction(fake: FakeInteraction) -> discord.Interaction[discord.Client]:
     return cast(discord.Interaction[discord.Client], cast(object, fake))
+
+
+def as_context(fake: FakeContext) -> commands.Context[LequBot]:
+    return cast(commands.Context[LequBot], cast(object, fake))

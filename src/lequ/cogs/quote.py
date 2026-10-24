@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Literal, final, override
 
@@ -7,6 +8,7 @@ from discord.ext import commands
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from .. import LequBot, queries
+from ..constants import DEFAULT_MAX_QUOTE_LENGTH, DEFAULT_PREFIX
 from ..db import get_session
 from ..models import DiscordUser, NamedUser, Quote
 from ..ui import (
@@ -17,6 +19,7 @@ from ..ui import (
     ReportModal,
     ReportModalHandler,
     emoji_matches,
+    help_embed,
     paginate,
     quote_choice_name,
     quote_embed,
@@ -25,6 +28,8 @@ from ..ui import (
     send_reply,
     user_display,
 )
+
+logger = logging.getLogger(__name__)
 
 QUOTES_PER_PAGE = 8
 PREVIEW_LENGTH = 350
@@ -156,7 +161,7 @@ class QuoteCog(commands.Cog):
                 display = author.display
             elif member is not None:
                 author = await queries.get_or_create_discord_user(session, member.id)
-                display = member.display_name
+                display = author.display
             else:
                 cleaned = (name or "").strip()
                 if not cleaned:
@@ -246,6 +251,14 @@ class QuoteCog(commands.Cog):
                 interaction, "Give either a user or a name, not both.", ephemeral=True
             )
             return
+        logger.info(
+            "add command guild=%s user=%s member=%s name=%r text_len=%s",
+            interaction.guild_id,
+            interaction.user.id,
+            member.id if member is not None else None,
+            name,
+            len(text) if text is not None else None,
+        )
         added_by = await self._added_by(interaction.user.id)
         if text is None or (member is None and name is None):
             async with get_session() as session:
@@ -292,6 +305,12 @@ class QuoteCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        logger.info(
+            "quote command guild=%s user=%s quote_id=%s",
+            interaction.guild_id,
+            interaction.user.id,
+            quote_id,
+        )
         async with get_session() as session:
             if quote_id is None:
                 quote = await queries.get_random_quote(session, interaction.guild_id)
@@ -351,6 +370,12 @@ class QuoteCog(commands.Cog):
     @app_commands.describe(query="Text to search for")
     @app_commands.autocomplete(query=quote_search_autocomplete)
     async def search(self, interaction: discord.Interaction, query: str) -> None:
+        logger.info(
+            "search command guild=%s user=%s query=%r",
+            interaction.guild_id,
+            interaction.user.id,
+            query,
+        )
         if interaction.guild_id is None:
             await respond(
                 interaction,
@@ -470,6 +495,12 @@ class QuoteCog(commands.Cog):
     @app_commands.guild_only()
     @app_commands.describe(quote_id="ID of the quote to report")
     async def report(self, interaction: discord.Interaction, quote_id: int) -> None:
+        logger.info(
+            "report command guild=%s user=%s quote_id=%s",
+            interaction.guild_id,
+            interaction.user.id,
+            quote_id,
+        )
         if interaction.guild_id is None:
             await respond(
                 interaction,
@@ -729,18 +760,46 @@ class QuoteCog(commands.Cog):
             message, embed=quote_embed(quote, display), mention_author=False
         )
 
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message) -> None:
+    async def _help_page(self, guild_id: int | None) -> discord.Embed:
+        if guild_id is None:
+            return help_embed(DEFAULT_PREFIX, DEFAULT_MAX_QUOTE_LENGTH)
+        async with get_session() as session:
+            settings = await queries.get_guild_settings(session, guild_id)
+        return help_embed(settings.prefix, settings.max_quote_length)
+
+    @commands.command(name="help", aliases=["h"])
+    async def help_command(self, ctx: commands.Context[LequBot]) -> None:
+        guild_id = ctx.guild.id if ctx.guild is not None else None
+        logger.info("help requested guild=%s user=%s", guild_id, ctx.author.id)
+        await send_reply(ctx.message, embed=await self._help_page(guild_id))
+
+    @app_commands.command(name="help", description="Show quote bot help")
+    async def help(self, interaction: discord.Interaction) -> None:
+        logger.info(
+            "help requested guild=%s user=%s",
+            interaction.guild_id,
+            interaction.user.id,
+        )
+        await respond(interaction, embed=await self._help_page(interaction.guild_id))
+
+    @commands.command(name="q", aliases=["quote"])
+    async def quote_command(
+        self, ctx: commands.Context[LequBot], *, args: str = ""
+    ) -> None:
         """`<prefix>q` shows, lists or adds quotes; as a reply it quotes the message."""
+        logger.info(
+            "quote command guild=%s user=%s args=%r",
+            ctx.guild.id if ctx.guild is not None else None,
+            ctx.author.id,
+            args,
+        )
+        await self._handle_message(ctx.message, args)
+
+    async def _handle_message(self, message: discord.Message, args: str) -> None:
         if message.author.bot or message.guild is None:
             return
         guild = message.guild
-        prefix = await queries.cached_prefix(guild.id)
-        words = message.content.split(maxsplit=1)
-        if not words or words[0].lower() not in {f"{prefix}q", f"{prefix}quote"}:
-            return
-        rest = words[1] if len(words) > 1 else ""
-        parsed = parse_quote_args(rest)
+        parsed = parse_quote_args(args)
         if parsed is not None:
             mode, token, text = parsed
             if mode == "list":
@@ -762,6 +821,13 @@ class QuoteCog(commands.Cog):
             try:
                 target = await message.channel.fetch_message(reference.message_id)
             except discord.HTTPException:
+                logger.warning(
+                    "could not fetch replied message guild=%s channel=%s message=%s",
+                    guild.id,
+                    message.channel.id,
+                    reference.message_id,
+                    exc_info=True,
+                )
                 await send_reply(message, "Could not find the replied message.")
                 return
         if target.author.bot or not target.content.strip():
@@ -797,6 +863,13 @@ class QuoteCog(commands.Cog):
         configured = await queries.cached_emojis(payload.guild_id)
         if not emoji_matches(payload.emoji, configured):
             return
+        logger.debug(
+            "quote reaction guild=%s channel=%s message=%s user=%s",
+            payload.guild_id,
+            payload.channel_id,
+            payload.message_id,
+            payload.user_id,
+        )
         member = payload.member
         if member is None:
             guild = self.bot.get_guild(payload.guild_id)
@@ -842,7 +915,13 @@ class QuoteCog(commands.Cog):
         try:
             await message.add_reaction("✅")
         except discord.HTTPException:
-            pass
+            logger.warning("could not add success reaction", exc_info=True)
+        else:
+            logger.info(
+                "quote added via reaction message=%s user=%s",
+                payload.message_id,
+                payload.user_id,
+            )
 
 
 async def setup(bot: LequBot) -> None:

@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -7,7 +8,11 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from .env import Settings
 
-Path(Settings().db.path).parent.mkdir(parents=True, exist_ok=True)
+logger = logging.getLogger(__name__)
+
+_db_path = Settings().db.path
+Path(_db_path).parent.mkdir(parents=True, exist_ok=True)
+logger.info("database configured at %s", _db_path)
 
 engine = create_async_engine(
     f"sqlite+aiosqlite:///{Settings().db.path}",
@@ -17,7 +22,9 @@ engine = create_async_engine(
 
 @asynccontextmanager
 async def get_session():
+    logger.debug("opening database session")
     async with AsyncSession(engine, expire_on_commit=False) as session:
         await session.execute(text("pragma mmap_size=30000000000"))
         await session.execute(text("PRAGMA foreign_keys=ON"))
         yield session
+    logger.debug("closing database session")

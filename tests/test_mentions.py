@@ -1,7 +1,7 @@
 import discord
 from hypothesis import given, settings, strategies as st
 
-from tests.commands import group, invoke, subcommand
+from tests.commands import dispatch_prefix, group, invoke, subcommand
 from tests.conftest import reset_db
 from tests.fakes import (
     FakeBot,
@@ -50,7 +50,7 @@ async def test_message_commands_never_ping(token: str, text: str) -> None:
         f"$q {token} {text}",
     ):
         message = FakeMessage(content, FakeUser(42, "Tester"), guild)
-        await cog.on_message(as_message(message))
+        await dispatch_prefix(cog, message)
         assert message.replies, content
         for sent in message.replies:
             assert_no_pings(sent)
@@ -71,7 +71,7 @@ async def test_quote_text_mentions_never_ping() -> None:
     cog = QuoteCog(as_bot(FakeBot()))
     for content in ("$q alice", "$q all alice"):
         message = FakeMessage(content, FakeUser(42, "Tester"), FakeGuild())
-        await cog.on_message(as_message(message))
+        await dispatch_prefix(cog, message)
         assert message.replies
         assert_no_pings(message.replies[0])
 

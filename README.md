@@ -11,6 +11,8 @@ just upgrade   # create or migrate the database
 just bot       # run the bot
 ```
 
+Logging uses discord.py's logging setup at `INFO`; database, quote, reaction, command and admin actions are logged.
+
 ## Adding quotes
 
 - `/add` — add a quote. Omit arguments to be prompted with a form, or pass `member`/`name` and `text` directly. Length is limited by `/admin max-quote-length` (default 500).
@@ -23,6 +25,7 @@ just bot       # run the bot
   - `<user> <text>` adds a quote for that user.
   - `<user>` may be a mention, a Discord ID, a named user, or an alias.
 - React with a configured quote emoji (by default any custom emoji named `AddQuote`).
+- `$help` or `/help` — show the quote and admin command reference.
 
 Quotes added from a message store that message's id, so the same message can only be quoted once — repeat reactions, concurrent adds and restarts cannot create duplicates.
 
@@ -36,6 +39,7 @@ Quotes added from a message store that message's id, so the same message can onl
 | `/search <query>`                  | Search quotes with autocomplete                             |
 | `/favorites list\|add\|remove`     | Manage your own favorites                                   |
 | `/report <quote_id>`               | Report a quote for deletion                                 |
+| `/help`                            | Show usage and admin commands                               |
 | `/alias add <name> <alias>`        | Add an alias for a named user                               |
 | `/alias remove <alias>`            | Remove an alias                                             |
 | `/admin reports`                   | Review reports and delete or dismiss them *(Manage Server)* |

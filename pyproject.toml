@@ -35,7 +35,10 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-filterwarnings = ["ignore:(?s).*session\\.exec.*:DeprecationWarning"]
+filterwarnings = [
+    "ignore:(?s).*session\\.exec.*:DeprecationWarning",
+    "ignore:.*asyncio\\.iscoroutinefunction.*:DeprecationWarning",
+]
 
 [tool.basedpyright]
 typeCheckingMode = "all"

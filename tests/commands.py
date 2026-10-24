@@ -4,7 +4,13 @@ from typing import cast
 from discord import app_commands
 from discord.ext import commands
 
-from tests.fakes import FakeInteraction, as_interaction
+from tests.fakes import (
+    FakeContext,
+    FakeInteraction,
+    FakeMessage,
+    as_context,
+    as_interaction,
+)
 
 type Command = app_commands.Command[commands.Cog, ..., object]
 type Callback = Callable[..., Awaitable[object]]
@@ -47,3 +53,41 @@ async def invoke(
 ) -> None:
     callback = cast(Callback, item.callback)
     await callback(cog, as_interaction(interaction), *args, **kwargs)
+
+
+def prefix_command(
+    cog: commands.Cog, name: str
+) -> commands.Command[commands.Cog, ..., object]:
+    for item in cog.get_commands():
+        if item.name == name:
+            return item
+    raise AssertionError(f"prefix command {name!r} not found")
+
+
+async def invoke_prefix(
+    cog: commands.Cog,
+    message: FakeMessage,
+    args: str | None = None,
+    *,
+    name: str = "q",
+) -> None:
+    item = prefix_command(cog, name)
+    callback = cast(Callback, item.callback)
+    context = as_context(FakeContext(message))
+    if args is None:
+        await callback(cog, context)
+    else:
+        await callback(cog, context, args=args)
+
+
+async def dispatch_prefix(
+    cog: commands.Cog, message: FakeMessage, prefix: str = "$"
+) -> None:
+    if message.author.bot:
+        return
+    words = message.content.split(maxsplit=1)
+    if not words:
+        return
+    if words[0].lower() not in {f"{prefix}q", f"{prefix}quote"}:
+        return
+    await invoke_prefix(cog, message, words[1] if len(words) > 1 else "")

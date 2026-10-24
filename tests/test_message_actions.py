@@ -4,6 +4,7 @@ from hypothesis import strategies as st
 from lequ import queries
 from lequ.cogs.quote import QuoteCog
 from lequ.db import get_session
+from tests.commands import dispatch_prefix
 from tests.conftest import reset_db
 from tests.fakes import (
     FakeBot,
@@ -26,7 +27,7 @@ def command_text(draw: st.DrawFn) -> str:
     rest = draw(st.text(max_size=60))
     kind = draw(st.integers(0, 5))
     if kind == 0:
-        return rest
+        return f"noise{rest}"
     if kind == 1:
         return f"{prefix}q{rest}"
     if kind == 2:
@@ -45,6 +46,8 @@ async def run_message(
     reference: FakeReference | None = None,
     mentions: tuple[FakeUser, ...] = (),
     channel: FakeChannel | None = None,
+    prefix: str = "$",
+    bot: FakeBot | None = None,
 ) -> FakeMessage:
     guild = FakeGuild()
     message = FakeMessage(
@@ -55,7 +58,8 @@ async def run_message(
         mentions=mentions,
         channel=channel,
     )
-    await QuoteCog(as_bot(FakeBot())).on_message(as_message(message))
+    cog = QuoteCog(as_bot(bot or FakeBot()))
+    await dispatch_prefix(cog, message, prefix)
     return message
 
 
@@ -141,10 +145,11 @@ async def test_alias_routes_to_canonical_named_user() -> None:
     await reset_db()
     seeded = await seed_base()
     message = await run_message("$q bobby alias quote")
-    assert message.replies[0].embed is not None
-    footer = message.replies[0].embed.footer.text
-    assert footer is not None
-    assert footer.startswith("-bob |")
+    embed = message.replies[0].embed
+    assert embed is not None
+    assert embed.title is not None and embed.title.startswith("-# ID: ")
+    assert embed.fields[0].name == "Quoted by"
+    assert embed.fields[0].value == "bob"
     assert await quote_count(seeded.bob_id) == 2
 
 
@@ -159,15 +164,20 @@ async def test_mention_and_numeric_id_add_quotes() -> None:
         guild,
         mentions=(member,),
     )
-    await QuoteCog(as_bot(FakeBot())).on_message(as_message(message))
-    assert message.replies[0].embed is not None
+    await dispatch_prefix(QuoteCog(as_bot(FakeBot())), message)
+    embed = message.replies[0].embed
+    assert embed is not None
+    assert embed.title is not None and embed.title.startswith("-# ID: ")
+    assert embed.fields[0].name == "Quoted by"
+    assert embed.fields[0].value == "<@123>"
+    assert embed.color is not None
     assert await quote_count(seeded.discord_id) == 2
 
     async with get_session() as session:
         await queries.get_or_create_discord_user(session, 777)
     bot = FakeBot(fail_fetch=True)
     message = FakeMessage("$q 777 id quote", FakeUser(42, "Tester"), guild)
-    await QuoteCog(as_bot(bot)).on_message(as_message(message))
+    await dispatch_prefix(QuoteCog(as_bot(bot)), message)
     assert message.replies[0].embed is not None
     assert bot.fetches == 0
 
@@ -227,9 +237,9 @@ async def test_custom_prefix_is_used() -> None:
     await seed_base()
     async with get_session() as session:
         await queries.set_prefix(session, 1, "!")
-    message = await run_message("!q all alice")
+    message = await run_message("!q all alice", prefix="!")
     assert message.replies[0].embed is not None
-    message = await run_message("$q all alice")
+    message = await run_message("$q all alice", prefix="!")
     assert message.replies == []
 
 

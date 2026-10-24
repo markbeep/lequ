@@ -15,6 +15,7 @@ type ReportModalHandler = Callable[[discord.Interaction, str | None], Awaitable[
 type ButtonAction = Callable[[discord.Interaction], Awaitable[None]]
 
 NO_MENTIONS = discord.AllowedMentions.none()
+EMBED_COLOR = 0x5865F2
 
 
 def safe_text(content: str | None) -> str | None:
@@ -83,9 +84,50 @@ def emoji_matches(emoji: discord.PartialEmoji, configured: list[str]) -> bool:
 
 def quote_embed(quote: Quote, display: str) -> discord.Embed:
     embed = discord.Embed(
-        description=discord.utils.escape_mentions(quote.text), color=0x404648
+        title=f"-# ID: {quote.id}",
+        description=discord.utils.escape_mentions(quote.text),
+        color=EMBED_COLOR,
     )
-    embed.set_footer(text=f"-{display} | ID: {quote.id}")
+    embed.add_field(name="Quoted by", value=display, inline=True)
+    return embed
+
+
+def help_embed(prefix: str, max_length: int) -> discord.Embed:
+    safe_prefix = discord.utils.escape_mentions(prefix)
+    embed = discord.Embed(
+        title="Lequ help",
+        description="Store and retrieve quotes.",
+        color=EMBED_COLOR,
+    )
+    embed.add_field(
+        name="Quotes",
+        value=(
+            f"`{safe_prefix}q` — random quote\n"
+            f"`{safe_prefix}q <user>` — random quote from a user\n"
+            f"`{safe_prefix}q all <user>` / `{safe_prefix}q <user> all` — list quotes\n"
+            f"`{safe_prefix}q <user> <text>` — add a quote\n"
+            f"`{safe_prefix}q` as a reply — quote the replied message\n"
+            f"`{safe_prefix}quote` — alias for `{safe_prefix}q`\n"
+            "`<user>` — mention, Discord ID, name, or alias"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Aliases",
+        value="`/alias add <name> <alias>` — add\n`/alias remove <alias>` — remove",
+        inline=False,
+    )
+    embed.add_field(
+        name="Admin (Manage Server)",
+        value=(
+            f"`/admin prefix [{safe_prefix}]` — change the prefix\n"
+            "`/admin max-quote-length [value]` — quote length limit\n"
+            "`/admin emojis add|remove|list` — quote reaction emojis\n"
+            "`/admin reports` — review reported quotes"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text=f"Prefix: {safe_prefix} · Max length: {max_length}")
     return embed
 
 

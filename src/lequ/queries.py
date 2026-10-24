@@ -1,4 +1,5 @@
 import difflib
+import logging
 
 from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +38,8 @@ class AliasShadowed(Exception):
     """The alias is already the name of another named user."""
 
 
+logger = logging.getLogger(__name__)
+
 _prefix_cache: dict[int, str] = {}
 _emoji_cache: dict[int, list[str]] = {}
 
@@ -48,6 +51,7 @@ async def get_or_create_discord_user(
     user = result.first()
     if user is not None:
         return user
+    logger.info("creating discord user row for discord_id=%s", discord_id)
     user = User(user_type="discord", discord_id=discord_id)
     session.add(user)
     try:
@@ -66,6 +70,7 @@ async def get_or_create_named_user(session: AsyncSession, name: str) -> NamedUse
     user = result.first()
     if user is not None:
         return user
+    logger.info("creating named user row for name=%r", name)
     user = User(user_type="named", name=name)
     session.add(user)
     try:
@@ -108,7 +113,9 @@ async def add_alias(session: AsyncSession, name: str, alias: str) -> bool:
         raise NotNamedUser
     shadow = await get_named_user(session, alias)
     if shadow is not None and shadow.id != user.id:
+        logger.info("alias %r rejected: shadows named user %r", alias, alias)
         raise AliasShadowed
+    logger.info("adding alias %r for named user %r", alias, name)
     session.add(Aliases(user_id=user.id, alias=alias))
     try:
         await session.commit()
@@ -121,6 +128,7 @@ async def add_alias(session: AsyncSession, name: str, alias: str) -> bool:
 async def remove_alias(session: AsyncSession, alias: str) -> bool:
     result = await session.exec(delete(Aliases).where(col(Aliases.alias) == alias))
     await session.commit()
+    logger.info("removed alias %r (removed=%s)", alias, result.rowcount > 0)
     return result.rowcount > 0
 
 
@@ -142,7 +150,20 @@ async def add_quote(
         )
     )
     if existing.first() is not None:
+        logger.info(
+            "duplicate quote guild=%s author=%s text=%r",
+            guild_id,
+            author_id,
+            text,
+        )
         raise AlreadyQuoted from None
+    logger.debug(
+        "adding quote guild=%s author=%s added_by=%s text=%r",
+        guild_id,
+        author_id,
+        added_by_id,
+        text,
+    )
     quote = Quote(text=text, author=author_id, added_by=added_by_id, guild_id=guild_id)
     session.add(quote)
     await session.flush()  # populates quote.id
@@ -161,8 +182,21 @@ async def add_quote(
             await session.flush()
         except IntegrityError:
             await session.rollback()
+            logger.info(
+                "message already quoted guild=%s channel=%s message=%s",
+                guild_id,
+                channel_id,
+                message_id,
+            )
             raise AlreadyQuoted from None
     await session.commit()
+    logger.info(
+        "quote added id=%s guild=%s author=%s message=%s",
+        quote.id,
+        guild_id,
+        author_id,
+        message_id,
+    )
     return quote
 
 
@@ -237,6 +271,12 @@ async def delete_quote(session: AsyncSession, quote_id: int, guild_id: int) -> b
         delete(Quote).where(col(Quote.id) == quote_id, col(Quote.guild_id) == guild_id)
     )
     await session.commit()
+    logger.info(
+        "deleted quote id=%s guild=%s (deleted=%s)",
+        quote_id,
+        guild_id,
+        result.rowcount > 0,
+    )
     return result.rowcount > 0
 
 
@@ -246,6 +286,12 @@ async def create_report(
     existing = await get_report(session, quote_id)
     if existing is not None:
         raise DuplicateReport
+    logger.info(
+        "creating report quote=%s reporter=%s reason=%r",
+        quote_id,
+        reporter_id,
+        reason,
+    )
     report = Report(quote_id=quote_id, reporter=reporter_id, reason=reason)
     session.add(report)
     try:
@@ -277,6 +323,7 @@ async def get_reports(
 async def delete_report(session: AsyncSession, quote_id: int) -> bool:
     result = await session.exec(delete(Report).where(col(Report.quote_id) == quote_id))
     await session.commit()
+    logger.info("deleted report quote=%s (deleted=%s)", quote_id, result.rowcount > 0)
     return result.rowcount > 0
 
 
@@ -293,6 +340,7 @@ async def is_favorite(session: AsyncSession, user_id: int, quote_id: int) -> boo
 async def add_favorite(session: AsyncSession, user_id: int, quote_id: int) -> bool:
     if await is_favorite(session, user_id, quote_id):
         return False
+    logger.info("adding favorite user=%s quote=%s", user_id, quote_id)
     session.add(FavoriteQuote(user_id=user_id, quote_id=quote_id))
     try:
         await session.commit()
@@ -310,6 +358,7 @@ async def remove_favorite(session: AsyncSession, user_id: int, quote_id: int) ->
         )
     )
     await session.commit()
+    logger.info("removed favorite user=%s quote=%s", user_id, quote_id)
     return result.rowcount > 0
 
 
@@ -355,6 +404,7 @@ async def set_prefix(session: AsyncSession, guild_id: int, prefix: str | None) -
     session.add(settings)
     await session.commit()
     _prefix_cache[guild_id] = stored
+    logger.info("prefix updated guild=%s prefix=%r", guild_id, stored)
     return stored
 
 
@@ -366,6 +416,7 @@ async def set_max_quote_length(
     settings.max_quote_length = stored
     session.add(settings)
     await session.commit()
+    logger.info("max quote length updated guild=%s value=%s", guild_id, stored)
     return stored
 
 
@@ -389,6 +440,7 @@ async def add_emoji(session: AsyncSession, guild_id: int, emoji: str) -> bool:
         await session.rollback()
         return False
     _emoji_cache.pop(guild_id, None)
+    logger.info("added quote emoji guild=%s emoji=%r", guild_id, emoji)
     return True
 
 
@@ -400,6 +452,12 @@ async def remove_emoji(session: AsyncSession, guild_id: int, emoji: str) -> bool
     )
     await session.commit()
     _emoji_cache.pop(guild_id, None)
+    logger.info(
+        "removed quote emoji guild=%s emoji=%r (removed=%s)",
+        guild_id,
+        emoji,
+        result.rowcount > 0,
+    )
     return result.rowcount > 0
 
 

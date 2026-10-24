@@ -1,3 +1,4 @@
+import logging
 from typing import final, override
 
 import discord
@@ -9,6 +10,8 @@ from ..constants import DEFAULT_MAX_QUOTE_LENGTH
 from ..db import get_session
 from ..models import Quote, Report, User
 from ..ui import ActionButton, emoji_key, respond, safe_text
+
+logger = logging.getLogger(__name__)
 
 QUOTE_PREVIEW_LENGTH = 500
 
@@ -138,6 +141,12 @@ class ReportsView(discord.ui.View):
         if not await self._check(interaction):
             return
         _, quote, _ = self.entries[self.index]
+        logger.info(
+            "deleting reported quote id=%s guild=%s user=%s",
+            quote.id,
+            self.guild_id,
+            interaction.user.id,
+        )
         async with get_session() as session:
             await queries.delete_quote(session, quote.id, self.guild_id)
         await self._drop_current(interaction)
@@ -146,6 +155,11 @@ class ReportsView(discord.ui.View):
         if not await self._check(interaction):
             return
         _, quote, _ = self.entries[self.index]
+        logger.info(
+            "dismissing report quote=%s user=%s",
+            quote.id,
+            interaction.user.id,
+        )
         async with get_session() as session:
             await queries.delete_report(session, quote.id)
         await self._drop_current(interaction)
