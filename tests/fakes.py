@@ -1,6 +1,7 @@
+# pyright: reportIncompatibleVariableOverride=false, reportMissingSuperCall=false
 from dataclasses import dataclass
 from itertools import count
-from typing import cast, override
+from typing import Literal, cast, final, override
 
 import aiohttp
 import discord
@@ -16,25 +17,67 @@ class FakeAsset:
         self.url = url
 
 
-class FakeUser:
-    id: int
-    display_name: str
-    name: str
-    bot: bool
+@final
+class FakeUser(discord.Member):
+    """Guild member double.
 
-    def __init__(self, user_id: int, name: str = "user", *, bot: bool = False) -> None:
-        self.id = user_id
-        self.display_name = name
-        self.name = name
-        self.bot = bot
+    Subclasses ``discord.Member`` so ``isinstance`` checks in production code
+    (such as the reports permission gate) run, without building real state.
+    """
+
+    def __init__(
+        self,
+        user_id: int,
+        name: str = "user",
+        *,
+        bot: bool = False,
+        permissions: discord.Permissions | None = None,
+    ) -> None:
+        self._id: int = user_id
+        self._name: str = name
+        self._bot: bool = bot
+        self._guild_permissions: discord.Permissions = (
+            permissions or discord.Permissions.none()
+        )
 
     @property
-    def display_avatar(self) -> FakeAsset:
-        return FakeAsset(f"https://cdn.discordapp.com/avatars/{self.id}.png")
+    @override
+    def id(self) -> int:
+        return self._id
 
     @property
+    @override
+    def name(self) -> str:
+        return self._name
+
+    @property
+    @override
+    def display_name(self) -> str:
+        return self._name
+
+    @property
+    @override
+    def bot(self) -> bool:
+        return self._bot
+
+    @property
+    @override
+    def display_avatar(self) -> discord.Asset:
+        asset = FakeAsset(f"https://cdn.discordapp.com/avatars/{self.id}.png")
+        return cast("discord.Asset", cast(object, asset))
+
+    @property
+    @override
     def guild_permissions(self) -> discord.Permissions:
-        return discord.Permissions(manage_guild=True)
+        return self._guild_permissions
+
+    @override
+    def __hash__(self) -> int:
+        return hash(self.id)
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, FakeUser) and other._id == self._id
 
 
 class FakeGuild:
@@ -114,17 +157,21 @@ class FakeResponse:
 
 class FakeInteraction:
     user: FakeUser
-    guild_id: int
+    guild_id: int | None
+    permissions: discord.Permissions
     response: FakeResponse
-    _original: "FakeMessage"
+    _original: FakeMessage
 
-    def __init__(self, user: FakeUser | None = None, guild_id: int = 1) -> None:
-        self.user = user or FakeUser(42, "Tester")
+    def __init__(self, user: FakeUser | None = None, guild_id: int | None = 1) -> None:
+        self.user = user or FakeUser(
+            42, "Tester", permissions=discord.Permissions(manage_guild=True)
+        )
         self.guild_id = guild_id
+        self.permissions = self.user.guild_permissions
         self.response = FakeResponse()
-        self._original = FakeMessage("", self.user, FakeGuild(guild_id))
+        self._original = FakeMessage("", self.user, FakeGuild(guild_id or 1))
 
-    async def original_response(self) -> "FakeMessage":
+    async def original_response(self) -> FakeMessage:
         return self._original
 
 
@@ -143,13 +190,41 @@ class FakeNotFound(discord.NotFound):
         super().__init__(response, "missing")
 
 
-class FakeChannel(discord.abc.Messageable):
-    id: int
-    messages: dict[int, "FakeMessage"]
+@final
+class FakeChannel(discord.TextChannel):
+    """Text channel double; subclasses ``TextChannel`` so channel-type guards run."""
 
-    def __init__(self, channel_id: int = 7) -> None:
-        self.id = channel_id
-        self.messages = {}
+    def __init__(
+        self,
+        channel_id: int = 7,
+        *,
+        channel_type: Literal[discord.ChannelType.text, discord.ChannelType.news] = (
+            discord.ChannelType.text
+        ),
+    ) -> None:
+        self._id: int = channel_id
+        self._channel_type: Literal[
+            discord.ChannelType.text, discord.ChannelType.news
+        ] = channel_type
+        self.messages: dict[int, FakeMessage] = {}
+
+    @property
+    @override
+    def id(self) -> int:
+        return self._id
+
+    @property
+    @override
+    def type(self) -> Literal[discord.ChannelType.text, discord.ChannelType.news]:
+        return self._channel_type
+
+    @override
+    def __hash__(self) -> int:
+        return hash(self.id)
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, FakeChannel) and other._id == self._id
 
     @override
     async def fetch_message(self, message_id: int) -> discord.Message:
@@ -160,10 +235,10 @@ class FakeChannel(discord.abc.Messageable):
 
 class FakeReference:
     message_id: int
-    cached_message: "FakeMessage | None"
+    cached_message: FakeMessage | None
 
     def __init__(
-        self, message_id: int, cached_message: "FakeMessage | None" = None
+        self, message_id: int, cached_message: FakeMessage | None = None
     ) -> None:
         self.message_id = message_id
         self.cached_message = cached_message
@@ -176,19 +251,21 @@ class FakeMessage:
     id: int
     content: str
     author: FakeUser
-    guild: FakeGuild
+    guild: FakeGuild | None
     channel: FakeChannel
     reference: FakeReference | None
     mentions: list[FakeUser]
     replies: list[SentMessage]
     reactions: list[str]
     deleted: bool
+    # commands.Context reads this; None is enough for the doubles.
+    _state: None = None
 
     def __init__(
         self,
         content: str,
         author: FakeUser,
-        guild: FakeGuild,
+        guild: FakeGuild | None,
         *,
         channel: FakeChannel | None = None,
         reference: FakeReference | None = None,
@@ -204,6 +281,7 @@ class FakeMessage:
         self.mentions = list(mentions)
         self.replies = []
         self.reactions = []
+        self.attachments: list[object] = []
         self.deleted = False
 
     async def reply(
@@ -214,7 +292,7 @@ class FakeMessage:
         view: discord.ui.View | None = None,
         mention_author: bool = True,
         allowed_mentions: discord.AllowedMentions | None = None,
-    ) -> "FakeMessage":
+    ) -> FakeMessage:
         del mention_author
         self.replies.append(SentMessage(content, embed, view, False, allowed_mentions))
         return self
@@ -233,7 +311,7 @@ class FakeContext:
         self.message = message
 
     @property
-    def guild(self) -> FakeGuild:
+    def guild(self) -> FakeGuild | None:
         return self.message.guild
 
     @property
@@ -312,7 +390,11 @@ class FakeBot:
     def get_channel(self, channel_id: int) -> FakeChannel | None:
         return self.channels.get(channel_id)
 
-    def get_user(self, _user_id: int) -> discord.User | None:
+    def get_user(self, user_id: int) -> discord.User | None:
+        for guild in self.guilds.values():
+            member = guild.get_member(user_id)
+            if member is not None:
+                return cast(discord.User, cast(object, member))
         return None
 
     async def fetch_channel(self, channel_id: int) -> FakeChannel:

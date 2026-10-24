@@ -19,6 +19,7 @@ from ..ui import (
     QuoteModalHandler,
     ReportModal,
     ReportModalHandler,
+    code_span,
     emoji_matches,
     help_embed,
     message_jump_url,
@@ -576,24 +577,28 @@ class QuoteCog(commands.Cog):
             except queries.NotNamedUser:
                 await respond(
                     interaction,
-                    f"There is no named user called `{name}`.",
+                    f"There is no named user called {code_span(name)}.",
                     ephemeral=True,
                 )
                 return
             except queries.AliasShadowed:
                 await respond(
                     interaction,
-                    f"A named user is already called `{alias}`.",
+                    f"A named user is already called {code_span(alias)}.",
                     ephemeral=True,
                 )
                 return
         if added:
             await respond(
-                interaction, f"`{alias}` now points to `{name}`.", ephemeral=True
+                interaction,
+                f"{code_span(alias)} now points to {code_span(name)}.",
+                ephemeral=True,
             )
         else:
             await respond(
-                interaction, f"`{alias}` is already an alias.", ephemeral=True
+                interaction,
+                f"{code_span(alias)} is already an alias.",
+                ephemeral=True,
             )
 
     @aliases.command(name="remove", description="Remove an alias")
@@ -604,7 +609,9 @@ class QuoteCog(commands.Cog):
             removed = await queries.remove_alias(session, alias.removeprefix("@"))
         if removed:
             await respond(
-                interaction, f"Removed `{alias.removeprefix('@')}`.", ephemeral=True
+                interaction,
+                f"Removed {code_span(alias.removeprefix('@'))}.",
+                ephemeral=True,
             )
         else:
             await respond(interaction, "That alias does not exist.", ephemeral=True)

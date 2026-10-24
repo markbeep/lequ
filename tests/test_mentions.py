@@ -1,6 +1,12 @@
 import discord
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
+from lequ import queries
+from lequ.cogs.admin import AdminCog
+from lequ.cogs.quote import QuoteCog
+from lequ.db import get_session
+from lequ.ui import FavoriteView, Paginator, respond, safe_text, send_reply
 from tests.commands import dispatch_prefix, group, invoke, subcommand
 from tests.conftest import reset_db
 from tests.fakes import (
@@ -14,11 +20,6 @@ from tests.fakes import (
     as_message,
 )
 from tests.helpers import assert_no_pings, seed_base, sent_text
-from lequ import queries
-from lequ.cogs.admin import AdminCog
-from lequ.cogs.quote import QuoteCog
-from lequ.db import get_session
-from lequ.ui import FavoriteView, Paginator, respond, safe_text, send_reply
 
 MALICIOUS = ["@everyone", "@here", "<@123>", "<@&123>", "<@!123>", "<@&!123>"]
 

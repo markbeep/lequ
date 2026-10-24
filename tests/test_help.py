@@ -1,3 +1,6 @@
+from lequ import LequBot
+from lequ.cogs.quote import QuoteCog
+from lequ.ui import EMBED_COLOR
 from tests.commands import (
     command,
     dispatch_prefix,
@@ -15,9 +18,6 @@ from tests.fakes import (
     as_bot,
 )
 from tests.helpers import seed_base, sent_text
-from lequ import LequBot
-from lequ.cogs.quote import QuoteCog
-from lequ.ui import EMBED_COLOR
 
 
 async def test_prefix_commands_resolve_on_real_bot() -> None:

@@ -1,3 +1,4 @@
+import unicodedata
 from collections.abc import Awaitable, Callable
 from typing import final, override
 
@@ -22,6 +23,19 @@ MAX_EMBED_DESCRIPTION = 4096
 def safe_text(content: str | None) -> str | None:
     """Neutralize @everyone/@here in user-controlled message content."""
     return None if content is None else discord.utils.escape_mentions(content)
+
+
+def code_span(text: str) -> str:
+    """Wrap user-supplied text in a code span that backticks cannot break."""
+    longest = run = 0
+    for char in text:
+        run = run + 1 if char == "`" else 0
+        longest = max(longest, run)
+    if longest == 0:
+        return f"`{text}`"
+    fence = "`" * (longest + 1)
+    # CommonMark trims one padding space from multi-backtick spans.
+    return f"{fence} {text} {fence}"
 
 
 async def respond(
@@ -74,6 +88,35 @@ def emoji_key(raw: str) -> str:
     return str(discord.PartialEmoji.from_str(raw))
 
 
+_KEYCAP_BASES = frozenset("0123456789#*")
+
+
+def is_emoji(raw: str) -> bool:
+    """Best-effort emoji check; no Unicode emoji table is bundled."""
+    text = raw.strip()
+    if not text:
+        return False
+    if discord.PartialEmoji.from_str(text).id is not None:
+        return True
+    if len(text) in (2, 3) and text[-1] == "\u20e3":
+        return text[0] in _KEYCAP_BASES and text[1:-1] in ("", "\ufe0f")
+    has_symbol = False
+    for index, char in enumerate(text):
+        code = ord(char)
+        if char == "\u200d" or 0xE0020 <= code <= 0xE007F:
+            continue  # ZWJ sequence or flag tag characters
+        category = unicodedata.category(char)
+        if category in {"Mn", "Me", "Sk"}:
+            continue  # variation selectors, keycap, skin tone
+        if category == "So" or (
+            category == "Sm" and text[index + 1 : index + 2] == "\ufe0f"
+        ):
+            has_symbol = True
+            continue
+        return False
+    return has_symbol
+
+
 def emoji_matches(emoji: discord.PartialEmoji, configured: list[str]) -> bool:
     name = (emoji.name or "").lower()
     key = str(emoji).lower()
@@ -113,6 +156,7 @@ def quote_embed(
 
 def help_embed(prefix: str, max_length: int) -> discord.Embed:
     safe_prefix = discord.utils.escape_mentions(prefix)
+    q = code_span(f"{safe_prefix}q")
     embed = discord.Embed(
         title="Lequ help",
         description="Store and retrieve quotes.",
@@ -121,14 +165,14 @@ def help_embed(prefix: str, max_length: int) -> discord.Embed:
     embed.add_field(
         name="Quotes",
         value=(
-            f"`{safe_prefix}q` — random quote\n"
-            f"`{safe_prefix}q <id>` — show that quote\n"
-            f"`{safe_prefix}q <user>` — random quote from a user\n"
-            f"`{safe_prefix}q all` — quote stats\n"
-            f"`{safe_prefix}q all <user>` / `{safe_prefix}q <user> all` — list quotes\n"
-            f"`{safe_prefix}q <user> <text>` — add a quote\n"
-            f"`{safe_prefix}q` as a reply — quote the replied message\n"
-            f"`{safe_prefix}quote` — alias for `{safe_prefix}q`\n"
+            f"{q} — random quote\n"
+            f"{q} <id> — show that quote\n"
+            f"{q} <user> — random quote from a user\n"
+            f"{q} all — quote stats\n"
+            f"{q} all <user> / {q} <user> all — list quotes\n"
+            f"{q} <user> <text> — add a quote\n"
+            f"{q} as a reply — quote the replied message\n"
+            f"{code_span(f'{safe_prefix}quote')} — alias for {q}\n"
             "`<user>` — mention, name, or alias (numeric ID when listing or adding)"
         ),
         inline=False,
@@ -143,7 +187,7 @@ def help_embed(prefix: str, max_length: int) -> discord.Embed:
         value=(
             f"`/admin prefix [{safe_prefix}]` — change the prefix\n"
             "`/admin max-quote-length [value]` — quote length limit\n"
-            "`/admin emojis add|remove|list` — quote reaction emojis\n"
+            "`/admin emote add|remove|list` — quote reaction emojis\n"
             "`/admin reports` — review reported quotes"
         ),
         inline=False,

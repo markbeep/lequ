@@ -9,7 +9,7 @@ from .. import LequBot, queries
 from ..constants import DEFAULT_MAX_QUOTE_LENGTH
 from ..db import get_session
 from ..models import Quote, Report, User
-from ..ui import ActionButton, emoji_key, respond, safe_text
+from ..ui import ActionButton, code_span, emoji_key, is_emoji, respond, safe_text
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,7 @@ class AdminCog(commands.Cog):
         default_permissions=discord.Permissions(manage_guild=True),
     )
     emojis = app_commands.Group(
-        name="emojis",
+        name="emote",
         description="Quote emojis",
         parent=admin,
         guild_only=True,
@@ -230,7 +230,9 @@ class AdminCog(commands.Cog):
         if value is None:
             await respond(interaction, "Prefix reset to `$`.", ephemeral=True)
         else:
-            await respond(interaction, f"Prefix set to `{stored}`.", ephemeral=True)
+            await respond(
+                interaction, f"Prefix set to {code_span(stored)}.", ephemeral=True
+            )
 
     @admin.command(name="max-quote-length", description="Set the maximum quote length")
     @app_commands.describe(
@@ -282,8 +284,7 @@ class AdminCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        partial = discord.PartialEmoji.from_str(emote)
-        if partial.id is None and not partial.is_unicode_emoji():
+        if not is_emoji(emote):
             await respond(interaction, "That is not a valid emoji.", ephemeral=True)
             return
         async with get_session() as session:

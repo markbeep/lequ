@@ -33,20 +33,20 @@ Quotes added from a message store that message's id, so the same message can onl
 
 ## Commands
 
-| Command                            | Description                                                 |
-| ---------------------------------- | ----------------------------------------------------------- |
-| `/add [member] [name] [text]`      | Add a quote                                                 |
-| `/quote [id]`                      | Show a quote (random if no id)                              |
-| `/quotes [user] [ephemeral]`       | List a user's quotes                                        |
-| `/search <query>`                  | Search quotes with autocomplete                             |
-| `/favorites list\|add\|remove`     | Manage your own favorites                                   |
-| `/report <quote_id>`               | Report a quote for deletion                                 |
-| `/help`                            | Show usage and admin commands                               |
-| `/alias add <name> <alias>`        | Add an alias for a named user                               |
-| `/alias remove <alias>`            | Remove an alias                                             |
-| `/admin reports`                   | Review reports and delete or dismiss them *(Manage Server)* |
-| `/admin max-quote-length [value]`  | Set the max quote length *(Manage Server)*                  |
-| `/admin prefix [value]`            | Set the command prefix *(Manage Server)*                    |
-| `/admin emojis add\|remove\|list`  | Configure quote emojis *(Manage Server)*                    |
+| Command                           | Description                                                 |
+| --------------------------------- | ----------------------------------------------------------- |
+| `/add [member] [name] [text]`     | Add a quote                                                 |
+| `/quote [id]`                     | Show a quote (random if no id)                              |
+| `/quotes [user] [ephemeral]`      | List a user's quotes                                        |
+| `/search <query>`                 | Search quotes with autocomplete                             |
+| `/favorites list\|add\|remove`    | Manage your own favorites                                   |
+| `/report <quote_id>`              | Report a quote for deletion                                 |
+| `/help`                           | Show usage and admin commands                               |
+| `/alias add <name> <alias>`       | Add an alias for a named user                               |
+| `/alias remove <alias>`           | Remove an alias                                             |
+| `/admin reports`                  | Review reports and delete or dismiss them _(Manage Server)_ |
+| `/admin max-quote-length [value]` | Set the max quote length _(Manage Server)_                  |
+| `/admin prefix [value]`           | Set the command prefix _(Manage Server)_                    |
+| `/admin emote add\|remove\|list`  | Configure quote adding emojis _(Manage Server)_             |
 
 Quotes shown by `/quote` and `/search` carry a ⭐ button that toggles the quote in the clicking user's favorites.

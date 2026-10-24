@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 
-from tests.fakes import SentMessage
+import discord
+
 from lequ import queries
 from lequ.db import get_session
+from tests.fakes import SentMessage
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,22 @@ def sent_text(sent: SentMessage) -> str:
     assert sent.content is None
     assert sent.embed is not None
     return sent.embed.description or ""
+
+
+def assert_embed_limits(embed: discord.Embed) -> None:
+    """Discord rejects embeds over these bounds; a user must never reach them."""
+    limits = {
+        "title": (embed.title, 256),
+        "description": (embed.description, 4096),
+        "footer": (embed.footer.text, 2048),
+    }
+    for label, (value, limit) in limits.items():
+        if value is not None:
+            assert len(value) <= limit, f"{label} is {len(value)} > {limit}"
+    assert len(embed.fields) <= 25
+    for field in embed.fields:
+        assert field.name is not None and len(field.name) <= 256
+        assert field.value is not None and len(field.value) <= 1024
 
 
 def assert_no_pings(sent: SentMessage) -> None:

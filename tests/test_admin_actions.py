@@ -1,3 +1,4 @@
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -5,7 +6,7 @@ from lequ import queries
 from lequ.cogs.admin import AdminCog
 from lequ.cogs.quote import QuoteCog
 from lequ.db import get_session
-from lequ.ui import safe_text
+from lequ.ui import code_span, safe_text
 from tests.commands import group, invoke, subcommand, subgroup
 from tests.conftest import reset_db
 from tests.fakes import FakeBot, FakeInteraction, as_bot
@@ -35,8 +36,9 @@ async def test_prefix_command_always_responds(value: str | None) -> None:
     async with get_session() as session:
         settings = await queries.get_guild_settings(session, 1)
     if valid:
+        assert value is not None
         assert settings.prefix == value
-        assert message == f"Prefix set to `{safe_text(value)}`."
+        assert message == safe_text(f"Prefix set to {code_span(value)}.")
     elif value is None:
         assert settings.prefix == "$"
         assert message == "Prefix reset to `$`."
@@ -98,15 +100,53 @@ async def test_alias_remove_always_responds(alias: str) -> None:
 async def test_emoji_commands_always_respond(emote: str) -> None:
     await reset_db()
     cog = AdminCog(as_bot(FakeBot()))
-    emojis = subgroup(group(cog, "admin"), "emojis")
-    add = subcommand(emojis, "add")
-    remove = subcommand(emojis, "remove")
-    list_cmd = subcommand(emojis, "list")
+    emote_group = subgroup(group(cog, "admin"), "emote")
+    add = subcommand(emote_group, "add")
+    remove = subcommand(emote_group, "remove")
+    list_cmd = subcommand(emote_group, "list")
 
     for cmd, args in ((add, (emote,)), (remove, (emote,)), (list_cmd, ())):
         interaction = FakeInteraction()
         await invoke(cmd, cog, interaction, *args)
         only_message(interaction)
+
+
+VALID_EMOJIS = [
+    "👍",
+    "⭐",
+    "❤️",
+    "👨‍👩‍👧‍👦",
+    "1️⃣",
+    "🏳️‍🌈",
+    "<:AddQuote:123456789012345678>",
+    "<a:party:123456789012345678>",
+]
+
+INVALID_EMOJIS = ["`", "@everyone", "not an emoji", "```", "AddQuote", "", "<:x:1>"]
+
+
+@pytest.mark.parametrize("emote", VALID_EMOJIS)
+async def test_emoji_add_accepts_real_emojis(emote: str) -> None:
+    await reset_db()
+    cog = AdminCog(as_bot(FakeBot()))
+    cmd = subcommand(subgroup(group(cog, "admin"), "emote"), "add")
+    interaction = FakeInteraction()
+    await invoke(cmd, cog, interaction, emote)
+    assert only_message(interaction) == "Added."
+    async with get_session() as session:
+        assert await queries.get_emojis(session, 1) == [emote]
+
+
+@pytest.mark.parametrize("emote", INVALID_EMOJIS)
+async def test_emoji_add_rejects_text(emote: str) -> None:
+    await reset_db()
+    cog = AdminCog(as_bot(FakeBot()))
+    cmd = subcommand(subgroup(group(cog, "admin"), "emote"), "add")
+    interaction = FakeInteraction()
+    await invoke(cmd, cog, interaction, emote)
+    assert only_message(interaction) == "That is not a valid emoji."
+    async with get_session() as session:
+        assert await queries.get_emojis(session, 1) == []
 
 
 async def test_reports_with_no_reports_responds() -> None:

@@ -2,6 +2,8 @@ import logging
 
 import pytest
 
+from lequ.cogs.admin import AdminCog
+from lequ.cogs.quote import QuoteCog
 from tests.commands import dispatch_prefix, group, invoke, subcommand
 from tests.conftest import reset_db
 from tests.fakes import (
@@ -13,8 +15,6 @@ from tests.fakes import (
     as_bot,
 )
 from tests.helpers import seed_base
-from lequ.cogs.admin import AdminCog
-from lequ.cogs.quote import QuoteCog
 
 
 async def test_quote_actions_are_logged(caplog: pytest.LogCaptureFixture) -> None:
