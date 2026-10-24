@@ -14,7 +14,7 @@ from tests.fakes import (
     FakeUser,
     as_bot,
 )
-from tests.helpers import seed_base
+from tests.helpers import seed_base, sent_text
 from lequ import LequBot
 from lequ.cogs.quote import QuoteCog
 from lequ.ui import EMBED_COLOR
@@ -33,6 +33,7 @@ async def test_prefix_commands_are_registered() -> None:
     quote = prefix_command(cog, "q")
     assert "quote" in quote.aliases
     prefix_command(cog, "help")
+    prefix_command(cog, "ping")
 
 
 async def test_quote_alias_dispatches_to_q() -> None:
@@ -43,6 +44,14 @@ async def test_quote_alias_dispatches_to_q() -> None:
     await dispatch_prefix(cog, message)
     assert message.replies
     assert message.replies[0].embed is not None
+
+
+async def test_ping_reports_heartbeat_latency() -> None:
+    await reset_db()
+    cog = QuoteCog(as_bot(FakeBot()))
+    message = FakeMessage("$ping", FakeUser(42, "Tester"), FakeGuild())
+    await invoke_prefix(cog, message, name="ping")
+    assert sent_text(message.replies[0]) == "Pong! 123 ms"
 
 
 async def test_prefix_help_page() -> None:

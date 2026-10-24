@@ -10,11 +10,9 @@ from .constants import DEFAULT_MAX_QUOTE_LENGTH, DEFAULT_PREFIX
 from .db import get_session
 from .models import (
     Aliases,
-    DiscordUser,
     FavoriteQuote,
     GuildEmoji,
     GuildSettings,
-    NamedUser,
     Quote,
     QuotedMessage,
     Report,
@@ -44,9 +42,7 @@ _prefix_cache: dict[int, str] = {}
 _emoji_cache: dict[int, list[str]] = {}
 
 
-async def get_or_create_discord_user(
-    session: AsyncSession, discord_id: int
-) -> DiscordUser:
+async def get_or_create_discord_user(session: AsyncSession, discord_id: int) -> User:
     result = await session.exec(select(User).where(col(User.discord_id) == discord_id))
     user = result.first()
     if user is not None:
@@ -65,7 +61,7 @@ async def get_or_create_discord_user(
     return user
 
 
-async def get_or_create_named_user(session: AsyncSession, name: str) -> NamedUser:
+async def get_or_create_named_user(session: AsyncSession, name: str) -> User:
     result = await session.exec(select(User).where(col(User.name) == name))
     user = result.first()
     if user is not None:
@@ -86,19 +82,17 @@ async def get_user(session: AsyncSession, user_id: int) -> User | None:
     return await session.get(User, user_id)
 
 
-async def get_discord_user(
-    session: AsyncSession, discord_id: int
-) -> DiscordUser | None:
+async def get_discord_user(session: AsyncSession, discord_id: int) -> User | None:
     result = await session.exec(select(User).where(col(User.discord_id) == discord_id))
     return result.first()
 
 
-async def get_named_user(session: AsyncSession, name: str) -> NamedUser | None:
+async def get_named_user(session: AsyncSession, name: str) -> User | None:
     result = await session.exec(select(User).where(col(User.name) == name))
     return result.first()
 
 
-async def get_alias_user(session: AsyncSession, alias: str) -> NamedUser | None:
+async def get_alias_user(session: AsyncSession, alias: str) -> User | None:
     result = await session.exec(
         select(User)
         .join(Aliases, col(Aliases.user_id) == col(User.id))
@@ -200,6 +194,26 @@ async def add_quote(
     return quote
 
 
+async def get_quoted_message(
+    session: AsyncSession, quote_id: int
+) -> QuotedMessage | None:
+    result = await session.exec(
+        select(QuotedMessage).where(col(QuotedMessage.quote_id) == quote_id)
+    )
+    return result.first()
+
+
+async def get_quoted_messages(
+    session: AsyncSession, quote_ids: list[int]
+) -> dict[int, QuotedMessage]:
+    if not quote_ids:
+        return {}
+    result = await session.exec(
+        select(QuotedMessage).where(col(QuotedMessage.quote_id).in_(quote_ids))
+    )
+    return {quoted.quote_id: quoted for quoted in result.all()}
+
+
 async def get_quote(
     session: AsyncSession, quote_id: int, guild_id: int
 ) -> Quote | None:
@@ -221,6 +235,32 @@ async def get_quotes_by_author(
         .order_by(col(Quote.id))
     )
     return list(result.all())
+
+
+async def get_quote_stats(session: AsyncSession, guild_id: int) -> tuple[int, int, int]:
+    """``(quotes, authors, favorited)`` counts for a guild."""
+    quotes = (
+        await session.exec(
+            select(func.count())
+            .select_from(Quote)
+            .where(col(Quote.guild_id) == guild_id)
+        )
+    ).one()
+    authors = (
+        await session.exec(
+            select(func.count(func.distinct(col(Quote.author)))).where(
+                col(Quote.guild_id) == guild_id
+            )
+        )
+    ).one()
+    favorited = (
+        await session.exec(
+            select(func.count(func.distinct(col(FavoriteQuote.quote_id))))
+            .join(Quote, col(FavoriteQuote.quote_id) == col(Quote.id))
+            .where(col(Quote.guild_id) == guild_id)
+        )
+    ).one()
+    return quotes, authors, favorited
 
 
 async def get_random_quote(session: AsyncSession, guild_id: int) -> Quote | None:

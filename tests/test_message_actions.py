@@ -4,7 +4,9 @@ from hypothesis import strategies as st
 from lequ import queries
 from lequ.cogs.quote import QuoteCog
 from lequ.db import get_session
-from tests.commands import dispatch_prefix
+from lequ.models import Quote, QuotedMessage
+from lequ.ui import MAX_EMBED_DESCRIPTION, quote_embed
+from tests.commands import command, dispatch_prefix, invoke
 from tests.conftest import reset_db
 from tests.fakes import (
     FakeBot,
@@ -92,10 +94,42 @@ async def test_unknown_user_gets_error() -> None:
     assert sent_text(message.replies[0]) == "nobody doesn't have any quotes."
 
 
-async def test_all_without_user_gets_usage_error() -> None:
+async def test_numeric_token_shows_quote_by_id() -> None:
     await reset_db()
+    await seed_base()
+    async with get_session() as session:
+        author = await queries.get_or_create_discord_user(session, 123)
+        quotes = await queries.get_quotes_by_author(session, author.id, 1)
+        quote_id = quotes[0].id
+    assert quote_id is not None
+
+    message = await run_message(f"$q {quote_id}")
+    embed = message.replies[0].embed
+    assert embed is not None
+    assert embed.footer.text is not None
+    assert f"ID: {quote_id}" in embed.footer.text
+    assert embed.thumbnail.url == "https://cdn.discordapp.com/avatars/123.png"
+
+    message = await run_message("$q 999999")
+    assert sent_text(message.replies[0]) == "No quote with that ID on this server."
+
+
+async def test_all_without_user_shows_quote_stats() -> None:
+    await reset_db()
+    await seed_base()
+    async with get_session() as session:
+        tester = await queries.get_or_create_discord_user(session, 42)
+        author = await queries.get_or_create_discord_user(session, 123)
+        quotes = await queries.get_quotes_by_author(session, author.id, 1)
+        await queries.add_favorite(session, tester.id, quotes[0].id)
     message = await run_message("$q all")
-    assert sent_text(message.replies[0]) == "Give a user whose quotes to list."
+    embed = message.replies[0].embed
+    assert embed is not None
+    assert embed.title == "All Quotes Stats"
+    fields = {field.name: field.value for field in embed.fields}
+    assert fields["Total Quotes"] == "3"
+    assert fields["Total Names"] == "3"
+    assert fields["Favorited"] == "1 / 3 (33.3%)"
 
 
 async def test_add_stores_quote_and_reports_success() -> None:
@@ -147,9 +181,9 @@ async def test_alias_routes_to_canonical_named_user() -> None:
     message = await run_message("$q bobby alias quote")
     embed = message.replies[0].embed
     assert embed is not None
-    assert embed.title is not None and embed.title.startswith("-# ID: ")
-    assert embed.fields[0].name == "Quoted by"
-    assert embed.fields[0].value == "bob"
+    assert embed.footer.text is not None
+    assert embed.footer.text.startswith("- bob | ID: ")
+    assert embed.thumbnail.url is None
     assert await quote_count(seeded.bob_id) == 2
 
 
@@ -164,22 +198,28 @@ async def test_mention_and_numeric_id_add_quotes() -> None:
         guild,
         mentions=(member,),
     )
-    await dispatch_prefix(QuoteCog(as_bot(FakeBot())), message)
+    bot = FakeBot()
+    await dispatch_prefix(QuoteCog(as_bot(bot)), message)
     embed = message.replies[0].embed
     assert embed is not None
-    assert embed.title is not None and embed.title.startswith("-# ID: ")
-    assert embed.fields[0].name == "Quoted by"
-    assert embed.fields[0].value == "<@123>"
+    assert embed.footer.text is not None
+    assert embed.footer.text.startswith("- Fetched123 | ID: ")
+    assert embed.thumbnail.url == "https://cdn.discordapp.com/avatars/123.png"
     assert embed.color is not None
+    assert bot.fetches == 1
     assert await quote_count(seeded.discord_id) == 2
 
     async with get_session() as session:
         await queries.get_or_create_discord_user(session, 777)
-    bot = FakeBot(fail_fetch=True)
+    bot = FakeBot()
     message = FakeMessage("$q 777 id quote", FakeUser(42, "Tester"), guild)
     await dispatch_prefix(QuoteCog(as_bot(bot)), message)
-    assert message.replies[0].embed is not None
-    assert bot.fetches == 0
+    embed = message.replies[0].embed
+    assert embed is not None
+    assert embed.footer.text is not None
+    assert embed.footer.text.startswith("- Fetched777 | ID: ")
+    assert embed.thumbnail.url == "https://cdn.discordapp.com/avatars/777.png"
+    assert bot.fetches == 1
 
 
 async def test_reply_quotes_target_and_rejects_bad_targets() -> None:
@@ -220,6 +260,54 @@ async def test_reply_quotes_target_and_rejects_bad_targets() -> None:
         "$q", reference=FakeReference(999999, None), channel=channel
     )
     assert sent_text(message.replies[0]) == "Could not find the replied message."
+
+
+async def test_quoted_message_links_its_source() -> None:
+    await reset_db()
+    await seed_base()
+    channel = FakeChannel()
+    target = FakeMessage(
+        "source text", FakeUser(55, "Target"), FakeGuild(), channel=channel
+    )
+    channel.messages[target.id] = target
+    message = await run_message(
+        "$q", reference=FakeReference(target.id, target), channel=channel
+    )
+    embed = message.replies[0].embed
+    assert embed is not None
+    assert embed.description is not None
+    url = f"https://discord.com/channels/1/{channel.id}/{target.id}"
+    assert embed.description.endswith(f"-# [[Message]]({url})")
+
+    async with get_session() as session:
+        author = await queries.get_or_create_discord_user(session, 55)
+        quotes = await queries.get_quotes_by_author(session, author.id, 1)
+        quote_id = quotes[-1].id
+
+    interaction = FakeInteraction()
+    cog = QuoteCog(as_bot(FakeBot()))
+    await invoke(command(cog, "quote"), cog, interaction, quote_id)
+    quote_embed = interaction.response.messages[0].embed
+    assert quote_embed is not None
+    assert quote_embed.description is not None
+    assert quote_embed.description.endswith(f"-# [[Message]]({url})")
+
+    message = await run_message("$q all <@55>")
+    listing = message.replies[0].embed
+    assert listing is not None
+    assert listing.description is not None
+    assert url in listing.description
+
+
+def test_quote_embed_truncates_text_for_message_link() -> None:
+    quote = Quote(id=1, text="x" * 5000, author=1, added_by=1, guild_id=1)
+    source = QuotedMessage(id=1, quote_id=1, guild_id=1, channel_id=2, message_id=3)
+    embed = quote_embed(quote, "user", source)
+    assert embed.description is not None
+    line = "-# [[Message]](https://discord.com/channels/1/2/3)"
+    kept = MAX_EMBED_DESCRIPTION - len(line) - 1
+    assert embed.description == "x" * kept + f"\n{line}"
+    assert len(embed.description) == MAX_EMBED_DESCRIPTION
 
 
 async def test_bot_messages_and_wrong_prefix_are_ignored() -> None:

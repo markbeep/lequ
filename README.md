@@ -20,10 +20,12 @@ Logging uses discord.py's logging setup at `INFO`; database, quote, reaction, co
 - `<prefix>q` or `<prefix>quote` (default prefix `$`, see `/admin prefix`):
   - as a reply to a message, quotes that message;
   - on its own, shows a random quote;
+  - `<id>` shows the quote with that ID;
   - `<user>` shows a random quote from that user;
+  - `all` shows server quote stats;
   - `all <user>` or `<user> all` lists that user's quotes;
   - `<user> <text>` adds a quote for that user.
-  - `<user>` may be a mention, a Discord ID, a named user, or an alias.
+  - `<user>` may be a mention, a named user, or an alias; a numeric Discord ID works when listing or adding.
 - React with a configured quote emoji (by default any custom emoji named `AddQuote`).
 - `$help` or `/help` — show the quote and admin command reference.
 

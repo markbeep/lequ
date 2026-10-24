@@ -9,6 +9,13 @@ from discord.ext import commands
 from lequ import LequBot
 
 
+class FakeAsset:
+    url: str
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+
 class FakeUser:
     id: int
     display_name: str
@@ -20,6 +27,10 @@ class FakeUser:
         self.display_name = name
         self.name = name
         self.bot = bot
+
+    @property
+    def display_avatar(self) -> FakeAsset:
+        return FakeAsset(f"https://cdn.discordapp.com/avatars/{self.id}.png")
 
     @property
     def guild_permissions(self) -> discord.Permissions:
@@ -286,18 +297,23 @@ class FakeBot:
     channels: dict[int, FakeChannel]
     fetches: int
     fail_fetch: bool
+    latency: float
 
     def __init__(self, *, fail_fetch: bool = False) -> None:
         self.guilds = {}
         self.channels = {}
         self.fetches = 0
         self.fail_fetch = fail_fetch
+        self.latency = 0.123
 
     def get_guild(self, guild_id: int) -> FakeGuild | None:
         return self.guilds.get(guild_id)
 
     def get_channel(self, channel_id: int) -> FakeChannel | None:
         return self.channels.get(channel_id)
+
+    def get_user(self, _user_id: int) -> discord.User | None:
+        return None
 
     async def fetch_channel(self, channel_id: int) -> FakeChannel:
         return self.channels[channel_id]

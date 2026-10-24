@@ -6,7 +6,7 @@ import discord
 from . import queries
 from .constants import DEFAULT_QUOTE_EMOJI_NAME
 from .db import get_session
-from .models import DiscordUser, NamedUser, Quote
+from .models import Quote, QuotedMessage, User
 
 type QuoteModalHandler = Callable[
     [discord.Interaction, str | None, str], Awaitable[None]
@@ -16,6 +16,7 @@ type ButtonAction = Callable[[discord.Interaction], Awaitable[None]]
 
 NO_MENTIONS = discord.AllowedMentions.none()
 EMBED_COLOR = 0x5865F2
+MAX_EMBED_DESCRIPTION = 4096
 
 
 def safe_text(content: str | None) -> str | None:
@@ -82,13 +83,31 @@ def emoji_matches(emoji: discord.PartialEmoji, configured: list[str]) -> bool:
     return name == DEFAULT_QUOTE_EMOJI_NAME
 
 
-def quote_embed(quote: Quote, display: str) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"-# ID: {quote.id}",
-        description=discord.utils.escape_mentions(quote.text),
-        color=EMBED_COLOR,
+def message_jump_url(quoted: QuotedMessage) -> str:
+    return (
+        f"https://discord.com/channels/{quoted.guild_id}/"
+        f"{quoted.channel_id}/{quoted.message_id}"
     )
-    embed.add_field(name="Quoted by", value=display, inline=True)
+
+
+def quote_embed(
+    quote: Quote,
+    display: str,
+    source: QuotedMessage | None = None,
+    avatar_url: str | None = None,
+) -> discord.Embed:
+    text = safe_text(quote.text) or ""
+    line = f"-# [[Message]]({message_jump_url(source)})" if source else ""
+    if line:
+        # Reserve the line plus its leading newline, keeping every other character.
+        text = text[: MAX_EMBED_DESCRIPTION - len(line) - 1]
+        line = f"\n{line}"
+    else:
+        text = text[:MAX_EMBED_DESCRIPTION]
+    embed = discord.Embed(description=text + line, color=EMBED_COLOR)
+    embed.set_footer(text=f"- {display} | ID: {quote.id}")
+    if avatar_url is not None:
+        embed.set_thumbnail(url=avatar_url)
     return embed
 
 
@@ -103,12 +122,14 @@ def help_embed(prefix: str, max_length: int) -> discord.Embed:
         name="Quotes",
         value=(
             f"`{safe_prefix}q` — random quote\n"
+            f"`{safe_prefix}q <id>` — show that quote\n"
             f"`{safe_prefix}q <user>` — random quote from a user\n"
+            f"`{safe_prefix}q all` — quote stats\n"
             f"`{safe_prefix}q all <user>` / `{safe_prefix}q <user> all` — list quotes\n"
             f"`{safe_prefix}q <user> <text>` — add a quote\n"
             f"`{safe_prefix}q` as a reply — quote the replied message\n"
             f"`{safe_prefix}quote` — alias for `{safe_prefix}q`\n"
-            "`<user>` — mention, Discord ID, name, or alias"
+            "`<user>` — mention, name, or alias (numeric ID when listing or adding)"
         ),
         inline=False,
     )
@@ -138,8 +159,17 @@ def quote_choice_name(quote: Quote) -> str:
     return text[: 100 - len(suffix)] + suffix
 
 
-def user_display(user: DiscordUser | NamedUser) -> str:
-    return user.display
+async def user_profile(bot: discord.Client, user: User) -> tuple[str, str | None]:
+    """Current username and avatar URL; named users have no avatar."""
+    if user.discord_id is None:
+        return user.name or "unknown", None
+    found = bot.get_user(user.discord_id)
+    if found is None:
+        try:
+            found = await bot.fetch_user(user.discord_id)
+        except discord.HTTPException:
+            return str(user.discord_id), None
+    return found.name, found.display_avatar.url
 
 
 def paginate[T](items: list[T], per_page: int) -> list[list[T]]:

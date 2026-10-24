@@ -1,5 +1,5 @@
 import time
-from typing import ClassVar, Literal, Protocol
+from typing import ClassVar, Literal
 
 from sqlalchemy import INTEGER, Column, String, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,34 +43,10 @@ class User(BaseModel, table=True):
     user_type: Literal["discord", "named"] = Field(
         sa_column=Column(String, index=True, nullable=False)
     )
+    # only used for discord users, this is the discord user id
     discord_id: int | None = Field(default=None, unique=True, index=True)
+    # only used for named users, this is the name of the user
     name: str | None = Field(default=None, unique=True, index=True)
-
-    @property
-    def display(self) -> str:
-        if self.discord_id is not None:
-            return f"<@{self.discord_id}>"
-        return self.name or "unknown"
-
-
-class DiscordUser(Protocol):
-    """A ``User`` row where only ``discord_id`` is meaningful."""
-
-    id: int
-    discord_id: int | None
-
-    @property
-    def display(self) -> str: ...
-
-
-class NamedUser(Protocol):
-    """A ``User`` row where only ``name`` is meaningful."""
-
-    id: int
-    name: str | None
-
-    @property
-    def display(self) -> str: ...
 
 
 class Aliases(BaseModel, table=True):

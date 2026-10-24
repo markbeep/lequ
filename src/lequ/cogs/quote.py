@@ -10,8 +10,9 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from .. import LequBot, queries
 from ..constants import DEFAULT_MAX_QUOTE_LENGTH, DEFAULT_PREFIX
 from ..db import get_session
-from ..models import DiscordUser, NamedUser, Quote
+from ..models import Quote, QuotedMessage, User
 from ..ui import (
+    EMBED_COLOR,
     FavoriteView,
     Paginator,
     QuoteModal,
@@ -20,13 +21,14 @@ from ..ui import (
     ReportModalHandler,
     emoji_matches,
     help_embed,
+    message_jump_url,
     paginate,
     quote_choice_name,
     quote_embed,
     respond,
     safe_text,
     send_reply,
-    user_display,
+    user_profile,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,7 +74,9 @@ class CommandError(Exception):
         self.message = message
 
 
-def _quote_pages(quotes: list[Quote], title: str) -> list[discord.Embed]:
+async def _quote_pages(quotes: list[Quote], title: str) -> list[discord.Embed]:
+    async with get_session() as session:
+        sources = await queries.get_quoted_messages(session, [q.id for q in quotes])
     pages: list[discord.Embed] = []
     chunks = paginate(quotes, QUOTES_PER_PAGE)
     total = len(chunks)
@@ -84,9 +88,11 @@ def _quote_pages(quotes: list[Quote], title: str) -> list[discord.Embed]:
             text = safe_text(quote.text) or ""
             if len(text) > PREVIEW_LENGTH:
                 text = text[:PREVIEW_LENGTH] + "[...]"
-            lines.append(f"**#{index}** `[{quote.id}]`\n{text}")
+            source = sources.get(quote.id)
+            link = f" [jump]({message_jump_url(source)})" if source else ""
+            lines.append(f"**#{index}** `[{quote.id}]`{link}\n{text}")
         embed = discord.Embed(
-            title=title, description="\n\n".join(lines), color=0x404648
+            title=title, description="\n\n".join(lines), color=EMBED_COLOR
         )
         embed.set_footer(text=f"Page {page_number}/{total}")
         pages.append(embed)
@@ -124,7 +130,7 @@ class QuoteCog(commands.Cog):
         )
         self.bot.tree.add_command(self.add_quote_menu)
 
-    async def _added_by(self, user_id: int) -> DiscordUser:
+    async def _added_by(self, user_id: int) -> User:
         async with get_session() as session:
             return await queries.get_or_create_discord_user(session, user_id)
 
@@ -132,14 +138,14 @@ class QuoteCog(commands.Cog):
         self,
         *,
         guild_id: int,
-        added_by: DiscordUser,
+        added_by: User,
         member: discord.abc.User | None = None,
         name: str | None = None,
-        discord_author: DiscordUser | None = None,
+        discord_author: User | None = None,
         text: str,
         channel_id: int | None = None,
         message_id: int | None = None,
-    ) -> tuple[Quote, str]:
+    ) -> tuple[Quote, str, str | None, QuotedMessage | None]:
         text = text.strip()
         if not text:
             raise CommandError("The quote text is empty.")
@@ -158,16 +164,13 @@ class QuoteCog(commands.Cog):
                 )
             if discord_author is not None:
                 author = discord_author
-                display = author.display
             elif member is not None:
                 author = await queries.get_or_create_discord_user(session, member.id)
-                display = author.display
             else:
                 cleaned = (name or "").strip()
                 if not cleaned:
                     raise CommandError("No name or user given.")
                 author = await queries.get_or_create_named_user(session, cleaned)
-                display = author.name or cleaned
             quote = await queries.add_quote(
                 session,
                 text=text,
@@ -177,16 +180,18 @@ class QuoteCog(commands.Cog):
                 channel_id=channel_id,
                 message_id=message_id,
             )
-        return quote, display
+            source = await queries.get_quoted_message(session, quote.id)
+        display, avatar_url = await user_profile(self.bot, author)
+        return quote, display, avatar_url, source
 
     def _modal_handler(
-        self, guild_id: int, added_by: DiscordUser, member: discord.Member | None
+        self, guild_id: int, added_by: User, member: discord.Member | None
     ) -> QuoteModalHandler:
         async def handler(
             interaction: discord.Interaction, modal_name: str | None, modal_text: str
         ) -> None:
             try:
-                quote, display = await self._add(
+                quote, display, avatar_url, source = await self._add(
                     guild_id=guild_id,
                     added_by=added_by,
                     member=member,
@@ -201,13 +206,13 @@ class QuoteCog(commands.Cog):
             except CommandError as exc:
                 await respond(interaction, str(exc), ephemeral=True)
                 return
-            await respond(interaction, embed=quote_embed(quote, display))
+            await respond(
+                interaction, embed=quote_embed(quote, display, source, avatar_url)
+            )
 
         return handler
 
-    def _report_handler(
-        self, added_by: DiscordUser, quote_id: int
-    ) -> ReportModalHandler:
+    def _report_handler(self, added_by: User, quote_id: int) -> ReportModalHandler:
         async def handler(interaction: discord.Interaction, reason: str | None) -> None:
             async with get_session() as session:
                 try:
@@ -275,7 +280,7 @@ class QuoteCog(commands.Cog):
             await interaction.response.send_modal(modal)
             return
         try:
-            quote, display = await self._add(
+            quote, display, avatar_url, source = await self._add(
                 guild_id=interaction.guild_id,
                 added_by=added_by,
                 member=member,
@@ -290,7 +295,9 @@ class QuoteCog(commands.Cog):
                 interaction, "That message has already been quoted.", ephemeral=True
             )
             return
-        await respond(interaction, embed=quote_embed(quote, display))
+        await respond(
+            interaction, embed=quote_embed(quote, display, source, avatar_url)
+        )
 
     @app_commands.command(name="quote", description="Show a quote")
     @app_commands.guild_only()
@@ -325,10 +332,15 @@ class QuoteCog(commands.Cog):
                 await respond(interaction, message, ephemeral=True)
                 return
             author = await queries.get_user(session, quote.author)
-        display = user_display(author) if author is not None else "unknown"
+            source = await queries.get_quoted_message(session, quote.id)
+        display, avatar_url = (
+            await user_profile(self.bot, author)
+            if author is not None
+            else ("unknown", None)
+        )
         await respond(
             interaction,
-            embed=quote_embed(quote, display),
+            embed=quote_embed(quote, display, source, avatar_url),
             view=FavoriteView(quote.id),
         )
 
@@ -360,7 +372,7 @@ class QuoteCog(commands.Cog):
         if not items:
             await respond(interaction, "No quotes found for this user.", ephemeral=True)
             return
-        pages = _quote_pages(items, f"Quotes from {target.display_name}")
+        pages = await _quote_pages(items, f"Quotes from {target.display_name}")
         view = Paginator(pages, interaction.user.id)
         await respond(interaction, embed=pages[0], view=view, ephemeral=ephemeral)
         view.message = await interaction.original_response()
@@ -398,9 +410,16 @@ class QuoteCog(commands.Cog):
                 await respond(interaction, "No matching quote found.", ephemeral=True)
                 return
             author = await queries.get_user(session, quote.author)
-        display = user_display(author) if author is not None else "unknown"
+            source = await queries.get_quoted_message(session, quote.id)
+        display, avatar_url = (
+            await user_profile(self.bot, author)
+            if author is not None
+            else ("unknown", None)
+        )
         await respond(
-            interaction, embed=quote_embed(quote, display), view=FavoriteView(quote.id)
+            interaction,
+            embed=quote_embed(quote, display, source, avatar_url),
+            view=FavoriteView(quote.id),
         )
 
     favorites = app_commands.Group(
@@ -429,7 +448,7 @@ class QuoteCog(commands.Cog):
                 interaction, "You don't have any favorite quotes yet.", ephemeral=True
             )
             return
-        pages = _quote_pages(items, "Your favorite quotes")
+        pages = await _quote_pages(items, "Your favorite quotes")
         view = Paginator(pages, interaction.user.id)
         await respond(interaction, embed=pages[0], view=view, ephemeral=True)
         view.message = await interaction.original_response()
@@ -605,7 +624,7 @@ class QuoteCog(commands.Cog):
             return
         added_by = await self._added_by(interaction.user.id)
         try:
-            quote, display = await self._add(
+            quote, display, avatar_url, source = await self._add(
                 guild_id=interaction.guild_id,
                 added_by=added_by,
                 member=message.author,
@@ -622,7 +641,11 @@ class QuoteCog(commands.Cog):
         except CommandError as exc:
             await respond(interaction, str(exc), ephemeral=True)
             return
-        await respond(interaction, embed=quote_embed(quote, display), ephemeral=True)
+        await respond(
+            interaction,
+            embed=quote_embed(quote, display, source, avatar_url),
+            ephemeral=True,
+        )
 
     async def _random_quote(
         self, message: discord.Message, guild: discord.Guild
@@ -633,17 +656,44 @@ class QuoteCog(commands.Cog):
                 await send_reply(message, "There are no quotes on this server yet.")
                 return
             author = await queries.get_user(session, quote.author)
-        display = user_display(author) if author is not None else "unknown"
+            source = await queries.get_quoted_message(session, quote.id)
+        display, avatar_url = (
+            await user_profile(self.bot, author)
+            if author is not None
+            else ("unknown", None)
+        )
         await send_reply(
             message,
-            embed=quote_embed(quote, display),
+            embed=quote_embed(quote, display, source, avatar_url),
+            view=FavoriteView(quote.id),
+            mention_author=False,
+        )
+
+    async def _show_quote(
+        self, message: discord.Message, quote_id: int, guild: discord.Guild
+    ) -> None:
+        async with get_session() as session:
+            quote = await queries.get_quote(session, quote_id, guild.id)
+            if quote is None:
+                await send_reply(message, "No quote with that ID on this server.")
+                return
+            author = await queries.get_user(session, quote.author)
+            source = await queries.get_quoted_message(session, quote.id)
+        display, avatar_url = (
+            await user_profile(self.bot, author)
+            if author is not None
+            else ("unknown", None)
+        )
+        await send_reply(
+            message,
+            embed=quote_embed(quote, display, source, avatar_url),
             view=FavoriteView(quote.id),
             mention_author=False,
         )
 
     async def _named_target(
         self, session: AsyncSession, token: str, *, create: bool
-    ) -> NamedUser | None:
+    ) -> User | None:
         name = token.removeprefix("@")
         user = await queries.get_named_user(session, name)
         if user is None:
@@ -654,7 +704,7 @@ class QuoteCog(commands.Cog):
 
     async def _db_user(
         self, session: AsyncSession, token: str, *, create: bool
-    ) -> DiscordUser | NamedUser | None:
+    ) -> User | None:
         """Mention, discord id, name or alias to a user row."""
         discord_id = target_id(token)
         if discord_id is None and token.isdigit():
@@ -665,6 +715,24 @@ class QuoteCog(commands.Cog):
             return await queries.get_discord_user(session, discord_id)
         return await self._named_target(session, token, create=create)
 
+    async def _quote_stats(
+        self, message: discord.Message, guild: discord.Guild
+    ) -> None:
+        async with get_session() as session:
+            total, authors, favorited = await queries.get_quote_stats(session, guild.id)
+        embed = discord.Embed(
+            title="All Quotes Stats",
+            description="You didn't specify whose quotes to list. So here are some stats.",
+            color=EMBED_COLOR,
+        )
+        embed.add_field(name="Total Quotes", value=str(total))
+        embed.add_field(name="Total Names", value=str(authors))
+        percentage = round(100 * favorited / total, 1) if total else 0
+        embed.add_field(
+            name="Favorited", value=f"{favorited} / {total} ({percentage}%)"
+        )
+        await send_reply(message, embed=embed, mention_author=False)
+
     async def _list_user_quotes(
         self, message: discord.Message, token: str, guild: discord.Guild
     ) -> None:
@@ -674,12 +742,11 @@ class QuoteCog(commands.Cog):
                 await send_reply(message, f"{token} doesn't have any quotes.")
                 return
             items = await queries.get_quotes_by_author(session, db_user.id, guild.id)
+        display, _ = await user_profile(self.bot, db_user)
         if not items:
-            await send_reply(
-                message, f"{user_display(db_user)} doesn't have any quotes."
-            )
+            await send_reply(message, f"{display} doesn't have any quotes.")
             return
-        pages = _quote_pages(items, f"Quotes from {user_display(db_user)}")
+        pages = await _quote_pages(items, f"Quotes from {display}")
         view = Paginator(pages, message.author.id)
         view.message = await send_reply(
             message, embed=pages[0], view=view, mention_author=False
@@ -696,14 +763,18 @@ class QuoteCog(commands.Cog):
             quote = await queries.get_random_quote_by_author(
                 session, db_user.id, guild.id
             )
-        if quote is None:
-            await send_reply(
-                message, f"{user_display(db_user)} doesn't have any quotes."
+            source = (
+                await queries.get_quoted_message(session, quote.id)
+                if quote is not None
+                else None
             )
+        display, avatar_url = await user_profile(self.bot, db_user)
+        if quote is None:
+            await send_reply(message, f"{display} doesn't have any quotes.")
             return
         await send_reply(
             message,
-            embed=quote_embed(quote, user_display(db_user)),
+            embed=quote_embed(quote, display, source, avatar_url),
             view=FavoriteView(quote.id),
             mention_author=False,
         )
@@ -717,7 +788,7 @@ class QuoteCog(commands.Cog):
     ) -> None:
         member: discord.abc.User | None = None
         name: str | None = None
-        discord_author: DiscordUser | None = None
+        discord_author: User | None = None
         user_id = target_id(token)
         if user_id is None and token.isdigit():
             user_id = int(token)
@@ -742,7 +813,7 @@ class QuoteCog(commands.Cog):
                 name = db_user.name
         added_by = await self._added_by(message.author.id)
         try:
-            quote, display = await self._add(
+            quote, display, avatar_url, source = await self._add(
                 guild_id=guild.id,
                 added_by=added_by,
                 member=member,
@@ -757,7 +828,9 @@ class QuoteCog(commands.Cog):
             await send_reply(message, str(exc))
             return
         await send_reply(
-            message, embed=quote_embed(quote, display), mention_author=False
+            message,
+            embed=quote_embed(quote, display, source, avatar_url),
+            mention_author=False,
         )
 
     async def _help_page(self, guild_id: int | None) -> discord.Embed:
@@ -766,6 +839,16 @@ class QuoteCog(commands.Cog):
         async with get_session() as session:
             settings = await queries.get_guild_settings(session, guild_id)
         return help_embed(settings.prefix, settings.max_quote_length)
+
+    @commands.command(name="ping")
+    async def ping(self, ctx: commands.Context[LequBot]) -> None:
+        """Reply with the bot's heartbeat latency."""
+        logger.info(
+            "ping requested guild=%s user=%s",
+            ctx.guild.id if ctx.guild is not None else None,
+            ctx.author.id,
+        )
+        await send_reply(ctx.message, f"Pong! {round(self.bot.latency * 1000)} ms")
 
     @commands.command(name="help", aliases=["h"])
     async def help_command(self, ctx: commands.Context[LequBot]) -> None:
@@ -806,9 +889,12 @@ class QuoteCog(commands.Cog):
                 if token:
                     await self._list_user_quotes(message, token, guild)
                 else:
-                    await send_reply(message, "Give a user whose quotes to list.")
+                    await self._quote_stats(message, guild)
             elif mode == "random":
-                await self._random_user_quote(message, token, guild)
+                if token.isdigit():
+                    await self._show_quote(message, int(token), guild)
+                else:
+                    await self._random_user_quote(message, token, guild)
             else:
                 await self._add_to_user(message, token, text, guild)
             return
@@ -835,7 +921,7 @@ class QuoteCog(commands.Cog):
             return
         added_by = await self._added_by(message.author.id)
         try:
-            quote, display = await self._add(
+            quote, display, avatar_url, source = await self._add(
                 guild_id=guild.id,
                 added_by=added_by,
                 member=target.author,
@@ -851,7 +937,9 @@ class QuoteCog(commands.Cog):
             await send_reply(message, str(exc))
             return
         await send_reply(
-            message, embed=quote_embed(quote, display), mention_author=False
+            message,
+            embed=quote_embed(quote, display, source, avatar_url),
+            mention_author=False,
         )
 
     @commands.Cog.listener()
